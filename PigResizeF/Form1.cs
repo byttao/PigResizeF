@@ -56,7 +56,7 @@ namespace PigResizeF
         private static HttpClient CreateUpdateHttpClient()
         {
             var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("PigResizeF/1.2");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("PigResizeF/1.3");
             return client;
         }
 

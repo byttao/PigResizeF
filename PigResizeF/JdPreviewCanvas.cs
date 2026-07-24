@@ -2,22 +2,37 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using SixLabors.ImageSharp.Formats;
+using SixLabors.ImageSharp.Metadata.Profiles.Exif;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+using ImageSharpImage = SixLabors.ImageSharp.Image;
+using ImageSharpSize = SixLabors.ImageSharp.Size;
 
 namespace PigResizeF
 {
     internal sealed class JdPreviewCanvas : ScrollableControl
     {
-        private const int MaxCachedImages = 6;
-        private const int MaxRenderedWidth = 2048;
+        private const int ThumbnailWidth = 1024;
+        private const int MaxCachedImages = 4;
         private readonly List<PreviewItem> items = new List<PreviewItem>();
         private readonly Dictionary<string, Bitmap> imageCache = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
         private readonly LinkedList<string> cacheOrder = new LinkedList<string>();
+        private readonly HashSet<string> loadingPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> failedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object cacheLock = new object();
+        private readonly SemaphoreSlim decodeSemaphore = new SemaphoreSlim(2, 2);
         private float zoom = 1F;
         private int compositionWidth;
         private long compositionHeight;
+        private int cacheGeneration;
 
         public JdPreviewCanvas()
         {
@@ -28,20 +43,31 @@ namespace PigResizeF
 
         public void SetImages(IEnumerable<string> paths)
         {
-            items.Clear();
+            var newItems = new List<PreviewItem>();
             foreach (var path in paths)
             {
-                var info = SixLabors.ImageSharp.Image.Identify(path)
+                var info = ImageSharpImage.Identify(path)
                     ?? throw new InvalidOperationException($"无法读取图片：{Path.GetFileName(path)}");
-                items.Add(new PreviewItem(path, info.Width, info.Height));
+                var orientation = GetOrientation(info);
+                var (width, height) = GetDisplayDimensions(info.Width, info.Height, orientation);
+                newItems.Add(new PreviewItem(path, width, height, orientation));
             }
+
+            var sameImageSet = items.Count == newItems.Count &&
+                items.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .SequenceEqual(newItems.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
+            items.Clear();
+            items.AddRange(newItems);
 
             compositionWidth = items.Count == 0 ? 0 : items.Max(item => item.Width);
             compositionHeight = compositionWidth == 0
                 ? 0
                 : items.Sum(item => (long)Math.Max(1, Math.Round(item.Height * (double)compositionWidth / item.Width)));
             zoom = compositionWidth == 0 ? 1F : Math.Clamp((ClientSize.Width - 24F) / compositionWidth, 0.05F, 1F);
-            ClearCache();
+            if (!sameImageSet)
+            {
+                ResetCache();
+            }
             UpdateScrollArea();
             Invalidate();
         }
@@ -52,7 +78,7 @@ namespace PigResizeF
             compositionWidth = 0;
             compositionHeight = 0;
             zoom = 1F;
-            ClearCache();
+            ResetCache();
             AutoScrollMinSize = Size.Empty;
             AutoScrollPosition = Point.Empty;
             Invalidate();
@@ -76,7 +102,6 @@ namespace PigResizeF
                     UpdateScrollArea();
                     var newY = Math.Max(0, (int)(contentY * zoom / oldZoom - e.Y));
                     AutoScrollPosition = new Point(0, newY);
-                    ClearCache();
                     Invalidate();
                 }
                 return;
@@ -107,10 +132,7 @@ namespace PigResizeF
                 var bottom = (long)Math.Round((y + itemHeight) * zoom);
                 if (bottom >= viewportTop && top <= viewportBottom)
                 {
-                    var bitmap = GetBitmap(item, displayWidth);
-                    var screenTop = Math.Clamp(top + AutoScrollPosition.Y, int.MinValue, int.MaxValue);
-                    var screenHeight = Math.Clamp(bottom - top, 1, int.MaxValue);
-                    e.Graphics.DrawImage(bitmap, AutoScrollPosition.X, (int)screenTop, displayWidth, (int)screenHeight);
+                    DrawPreviewItem(e.Graphics, item, displayWidth, top, bottom);
                 }
                 y += itemHeight;
             }
@@ -120,9 +142,241 @@ namespace PigResizeF
         {
             if (disposing)
             {
-                ClearCache();
+                ResetCache();
             }
             base.Dispose(disposing);
+        }
+
+        private void DrawPreviewItem(Graphics graphics, PreviewItem item, int displayWidth, long top, long bottom)
+        {
+            var screenTop = Math.Clamp(top + AutoScrollPosition.Y, int.MinValue, int.MaxValue);
+            var screenHeight = Math.Clamp(bottom - top, 1, int.MaxValue);
+            var bitmap = TryGetCachedBitmap(item.Path);
+            if (bitmap != null)
+            {
+                graphics.DrawImage(bitmap, AutoScrollPosition.X, (int)screenTop, displayWidth, (int)screenHeight);
+                return;
+            }
+
+            RequestThumbnail(item);
+            using var placeholder = new SolidBrush(System.Drawing.Color.FromArgb(241, 245, 249));
+            graphics.FillRectangle(placeholder, AutoScrollPosition.X, (int)screenTop, displayWidth, (int)screenHeight);
+        }
+
+        private void RequestThumbnail(PreviewItem item)
+        {
+            int generation;
+            lock (cacheLock)
+            {
+                if (imageCache.ContainsKey(item.Path) || loadingPaths.Contains(item.Path) || failedPaths.Contains(item.Path))
+                {
+                    return;
+                }
+
+                loadingPaths.Add(item.Path);
+                generation = cacheGeneration;
+            }
+
+            _ = Task.Run(() => LoadThumbnailAsync(item, generation));
+        }
+
+        private async Task LoadThumbnailAsync(PreviewItem item, int generation)
+        {
+            Bitmap? bitmap = null;
+            try
+            {
+                await decodeSemaphore.WaitAsync();
+                try
+                {
+                    bitmap = CreateThumbnail(item);
+                }
+                finally
+                {
+                    decodeSemaphore.Release();
+                }
+            }
+            catch (Exception)
+            {
+                // A bad source image should not block repainting the remaining images.
+            }
+
+            if (IsDisposed || !IsHandleCreated)
+            {
+                bitmap?.Dispose();
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(new Action(() => CompleteThumbnail(item.Path, generation, bitmap)));
+            }
+            catch (InvalidOperationException)
+            {
+                bitmap?.Dispose();
+            }
+        }
+
+        private void CompleteThumbnail(string path, int generation, Bitmap? bitmap)
+        {
+            lock (cacheLock)
+            {
+                if (generation != cacheGeneration)
+                {
+                    bitmap?.Dispose();
+                    return;
+                }
+
+                loadingPaths.Remove(path);
+                if (bitmap == null)
+                {
+                    failedPaths.Add(path);
+                    return;
+                }
+
+                imageCache[path] = bitmap;
+                cacheOrder.AddLast(path);
+                while (cacheOrder.Count > MaxCachedImages)
+                {
+                    var oldest = cacheOrder.First!.Value;
+                    cacheOrder.RemoveFirst();
+                    imageCache[oldest].Dispose();
+                    imageCache.Remove(oldest);
+                }
+            }
+
+            Invalidate();
+        }
+
+        private Bitmap? TryGetCachedBitmap(string path)
+        {
+            lock (cacheLock)
+            {
+                if (!imageCache.TryGetValue(path, out var bitmap))
+                {
+                    return null;
+                }
+
+                var node = cacheOrder.Find(path);
+                if (node != null)
+                {
+                    cacheOrder.Remove(node);
+                    cacheOrder.AddLast(node);
+                }
+                return bitmap;
+            }
+        }
+
+        private static Bitmap CreateThumbnail(PreviewItem item)
+        {
+            var targetWidth = Math.Min(ThumbnailWidth, item.Width);
+            var targetHeight = Math.Max(1, (int)Math.Round(item.Height * (double)targetWidth / item.Width));
+            var decoderOptions = new DecoderOptions
+            {
+                TargetSize = new ImageSharpSize(targetWidth, targetHeight),
+                SkipMetadata = true,
+                MaxFrames = 1
+            };
+
+            using var image = ImageSharpImage.Load<Bgra32>(decoderOptions, item.Path);
+            ApplyOrientation(image, item.Orientation);
+            if (image.Width != targetWidth || image.Height != targetHeight)
+            {
+                image.Mutate(context => context.Resize(targetWidth, targetHeight));
+            }
+            return ConvertToBitmap(image);
+        }
+
+        private static Bitmap ConvertToBitmap(SixLabors.ImageSharp.Image<Bgra32> image)
+        {
+            var pixels = new Bgra32[image.Width * image.Height];
+            image.CopyPixelDataTo(pixels);
+            var sourceBytes = MemoryMarshal.AsBytes(pixels.AsSpan()).ToArray();
+            var bitmap = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppArgb);
+            var rectangle = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+            var data = bitmap.LockBits(rectangle, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                var rowLength = bitmap.Width * 4;
+                if (data.Stride == rowLength)
+                {
+                    Marshal.Copy(sourceBytes, 0, data.Scan0, sourceBytes.Length);
+                }
+                else
+                {
+                    for (var row = 0; row < bitmap.Height; row++)
+                    {
+                        Marshal.Copy(sourceBytes, row * rowLength, IntPtr.Add(data.Scan0, row * data.Stride), rowLength);
+                    }
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+            return bitmap;
+        }
+
+        private static ushort GetOrientation(SixLabors.ImageSharp.ImageInfo info)
+        {
+            if (info.Metadata.ExifProfile != null &&
+                info.Metadata.ExifProfile.TryGetValue(ExifTag.Orientation, out IExifValue<ushort>? orientationValue) &&
+                orientationValue?.Value is ushort orientation)
+            {
+                return orientation;
+            }
+            return 1;
+        }
+
+        private static (int Width, int Height) GetDisplayDimensions(int width, int height, ushort orientation)
+        {
+            return orientation is 5 or 6 or 7 or 8 ? (height, width) : (width, height);
+        }
+
+        private static void ApplyOrientation(SixLabors.ImageSharp.Image<Bgra32> image, ushort orientation)
+        {
+            image.Mutate(context =>
+            {
+                switch (orientation)
+                {
+                    case 2:
+                        context.Flip(FlipMode.Horizontal);
+                        break;
+                    case 3:
+                        context.Rotate(RotateMode.Rotate180);
+                        break;
+                    case 4:
+                        context.Flip(FlipMode.Vertical);
+                        break;
+                    case 5:
+                        context.Flip(FlipMode.Vertical).Rotate(RotateMode.Rotate90);
+                        break;
+                    case 6:
+                        context.Rotate(RotateMode.Rotate90);
+                        break;
+                    case 7:
+                        context.Flip(FlipMode.Horizontal).Rotate(RotateMode.Rotate90);
+                        break;
+                    case 8:
+                        context.Rotate(RotateMode.Rotate270);
+                        break;
+                }
+            });
+        }
+
+        private void ResetCache()
+        {
+            lock (cacheLock)
+            {
+                cacheGeneration++;
+                foreach (var bitmap in imageCache.Values)
+                {
+                    bitmap.Dispose();
+                }
+                imageCache.Clear();
+                cacheOrder.Clear();
+                loadingPaths.Clear();
+                failedPaths.Clear();
+            }
         }
 
         private void UpdateScrollArea()
@@ -138,58 +392,6 @@ namespace PigResizeF
                 Math.Max(1, (int)Math.Min(int.MaxValue, Math.Ceiling(compositionHeight * zoom))));
         }
 
-        private Bitmap GetBitmap(PreviewItem item, int displayWidth)
-        {
-            if (imageCache.TryGetValue(item.Path, out var cached))
-            {
-                MoveToCacheTail(item.Path);
-                return cached;
-            }
-
-            using var stream = File.OpenRead(item.Path);
-            using var source = Image.FromStream(stream);
-            var cacheWidth = Math.Min(MaxRenderedWidth, displayWidth);
-            var cacheHeight = Math.Max(1, (int)Math.Round(source.Height * (double)cacheWidth / source.Width));
-            var rendered = new Bitmap(cacheWidth, cacheHeight);
-            using (var graphics = Graphics.FromImage(rendered))
-            {
-                graphics.Clear(System.Drawing.Color.White);
-                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                graphics.DrawImage(source, 0, 0, cacheWidth, cacheHeight);
-            }
-
-            imageCache[item.Path] = rendered;
-            cacheOrder.AddLast(item.Path);
-            while (cacheOrder.Count > MaxCachedImages)
-            {
-                var oldest = cacheOrder.First!.Value;
-                cacheOrder.RemoveFirst();
-                imageCache[oldest].Dispose();
-                imageCache.Remove(oldest);
-            }
-            return rendered;
-        }
-
-        private void MoveToCacheTail(string path)
-        {
-            var node = cacheOrder.Find(path);
-            if (node != null)
-            {
-                cacheOrder.Remove(node);
-                cacheOrder.AddLast(node);
-            }
-        }
-
-        private void ClearCache()
-        {
-            foreach (var bitmap in imageCache.Values)
-            {
-                bitmap.Dispose();
-            }
-            imageCache.Clear();
-            cacheOrder.Clear();
-        }
-
-        private sealed record PreviewItem(string Path, int Width, int Height);
+        private sealed record PreviewItem(string Path, int Width, int Height, ushort Orientation);
     }
 }
