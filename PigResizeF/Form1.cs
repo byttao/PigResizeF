@@ -25,6 +25,8 @@ namespace PigResizeF
 
         private List<string> droppedFilePaths = new List<string>();
         private readonly List<string> jdFilePaths = new List<string>();
+        private readonly List<string> cropFilePaths = new List<string>();
+        private readonly Dictionary<string, CropMode> cropFileModes = new(StringComparer.OrdinalIgnoreCase);
         private Size targetSize; // ���ڴ洢��ǰѡ���Ŀ��ߴ�
         private string sname = "";
         private ListBox jdListBox = null!;
@@ -34,6 +36,20 @@ namespace PigResizeF
         private Button buttonJdMoveDown = null!;
         private Button buttonJdPreview = null!;
         private Button buttonJdExport = null!;
+        private DataGridView cropGridView = null!;
+        private RichTextBox cropLogTextBox = null!;
+        private RichTextBox jdLogTextBox = null!;
+        private RadioButton cropAutoRadioButton = null!;
+        private RadioButton cropRandomRadioButton = null!;
+        private RadioButton cropGrid2RadioButton = null!;
+        private RadioButton cropGrid3RadioButton = null!;
+        private CheckBox cropQuickModeCheckBox = null!;
+        private CheckBox cropUseCustomOutputCheckBox = null!;
+        private TextBox cropOutputDirectoryTextBox = null!;
+        private Button cropBrowseOutputButton = null!;
+        private Button cropStartButton = null!;
+        private bool cropIsProcessing;
+        private bool cropGridRefreshing;
         private static readonly HttpClient UpdateHttpClient = CreateUpdateHttpClient();
         public Form1()
         {
@@ -47,7 +63,7 @@ namespace PigResizeF
             tableLayoutPanel1.DragEnter += PanelDropTarget_DragEnter;
             tableLayoutPanel1.DragDrop += PanelDropTarget_DragDrop;
 
-            InitializeJdDetailsTab();
+            InitializeAdditionalTabs();
             ApplyVisualStyle();
             Shown += Form1_Shown;
 
@@ -56,7 +72,7 @@ namespace PigResizeF
         private static HttpClient CreateUpdateHttpClient()
         {
             var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("PigResizeF/1.3");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("PigResizeF/1.5");
             return client;
         }
 
@@ -152,7 +168,7 @@ namespace PigResizeF
                 }
 
 
-                LogMessage($"�ɹ�׷�� {validImageFiles.Count} ��ͼƬ��", LogLevel.Info);
+                LogMessage($"成功追加 {validImageFiles.Count} 张图片。", LogLevel.Info);
                 // ��ӡ׷�ӵ��ļ�����������־ˢ��������ֻ��ӡ�����ӵ�
                 foreach (var filePath in validImageFiles)
                 {
@@ -161,11 +177,11 @@ namespace PigResizeF
                         LogMessage($"  + {Path.GetFileName(filePath)}", LogLevel.Info);
                     }
                 }
-                LogMessage($"��ǰ�б������� {droppedFilePaths.Count} ��ͼƬ��", LogLevel.Info);
+                LogMessage($"当前列表共有 {droppedFilePaths.Count} 张图片。", LogLevel.Info);
             }
             else
             {
-                LogMessage("û���ҵ���Ч��ͼƬ�ļ���", LogLevel.Warning);
+                LogMessage("没有找到有效图片文件。", LogLevel.Warning);
             }
         }
 
@@ -177,21 +193,135 @@ namespace PigResizeF
             return extension != null && (extension == ".jpg" || extension == ".jpeg" || extension == ".png" || extension == ".bmp" || extension == ".gif");
         }
 
-        private void InitializeJdDetailsTab()
+        private void InitializeAdditionalTabs()
         {
             Controls.Remove(tableLayoutPanel1);
 
             mainTabs = new TabControl { Dock = DockStyle.Fill };
-            var resizePage = new TabPage("图片裁切");
+            var resizePage = new TabPage("图片转换");
             resizePage.Controls.Add(tableLayoutPanel1);
             tableLayoutPanel1.Dock = DockStyle.Fill;
+
+            var cropPage = new TabPage("图片裁切");
+            cropPage.Controls.Add(CreateImageCropLayout());
 
             var jdPage = new TabPage("京东详情页裁切");
             jdPage.Controls.Add(CreateJdDetailsLayout());
 
             mainTabs.TabPages.Add(resizePage);
+            mainTabs.TabPages.Add(cropPage);
             mainTabs.TabPages.Add(jdPage);
             Controls.Add(mainTabs);
+        }
+
+        private Control CreateImageCropLayout()
+        {
+            var layout = new TableLayoutPanel
+            {
+                ColumnCount = 2,
+                RowCount = 3,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(5)
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 290F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 120F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var imageGroup = new GroupBox { Text = "待裁切图片", Dock = DockStyle.Fill };
+            cropGridView = new DataGridView
+            {
+                AllowDrop = true,
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AllowUserToResizeRows = false,
+                AutoGenerateColumns = false,
+                MultiSelect = true,
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            };
+            cropGridView.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "cropFileColumn",
+                HeaderText = "图片文件",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                ReadOnly = true
+            });
+            var modeColumn = new DataGridViewComboBoxColumn
+            {
+                Name = "cropModeColumn",
+                HeaderText = "识别模式",
+                Width = 130,
+                FlatStyle = FlatStyle.Flat
+            };
+            modeColumn.Items.AddRange("自动识别", "四角乱切", "四宫格拆分", "九宫格拆分");
+            cropGridView.Columns.Add(modeColumn);
+            cropGridView.DragEnter += cropGridView_DragEnter;
+            cropGridView.DragDrop += cropGridView_DragDrop;
+            cropGridView.CurrentCellDirtyStateChanged += cropGridView_CurrentCellDirtyStateChanged;
+            cropGridView.CellValueChanged += cropGridView_CellValueChanged;
+            imageGroup.Controls.Add(cropGridView);
+
+            var modeGroup = new GroupBox { Text = "裁切模式", Dock = DockStyle.Fill };
+            var modeLayout = new TableLayoutPanel { ColumnCount = 1, RowCount = 5, Dock = DockStyle.Fill };
+            for (var row = 0; row < 5; row++)
+            {
+                modeLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
+            }
+            cropAutoRadioButton = new RadioButton { Text = "自动识别", Checked = true, AutoSize = true, Anchor = AnchorStyles.Left };
+            cropRandomRadioButton = new RadioButton { Text = "四角乱切", AutoSize = true, Anchor = AnchorStyles.Left };
+            cropGrid2RadioButton = new RadioButton { Text = "四宫格拆分", AutoSize = true, Anchor = AnchorStyles.Left };
+            cropGrid3RadioButton = new RadioButton { Text = "九宫格拆分", AutoSize = true, Anchor = AnchorStyles.Left };
+            cropAutoRadioButton.CheckedChanged += cropModeRadioButton_CheckedChanged;
+            cropRandomRadioButton.CheckedChanged += cropModeRadioButton_CheckedChanged;
+            cropGrid2RadioButton.CheckedChanged += cropModeRadioButton_CheckedChanged;
+            cropGrid3RadioButton.CheckedChanged += cropModeRadioButton_CheckedChanged;
+            cropQuickModeCheckBox = new CheckBox { Text = "快速模式", AutoSize = true, Anchor = AnchorStyles.Left };
+            modeLayout.Controls.Add(cropAutoRadioButton, 0, 0);
+            modeLayout.Controls.Add(cropRandomRadioButton, 0, 1);
+            modeLayout.Controls.Add(cropGrid2RadioButton, 0, 2);
+            modeLayout.Controls.Add(cropGrid3RadioButton, 0, 3);
+            modeLayout.Controls.Add(cropQuickModeCheckBox, 0, 4);
+            modeGroup.Controls.Add(modeLayout);
+
+            var outputGroup = new GroupBox { Text = "保存设置", Dock = DockStyle.Fill };
+            var outputLayout = new TableLayoutPanel { ColumnCount = 3, RowCount = 2, Dock = DockStyle.Fill };
+            outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+            outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118F));
+            outputLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            outputLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            cropUseCustomOutputCheckBox = new CheckBox { Text = "自定义保存路径", AutoSize = true, Anchor = AnchorStyles.Left };
+            cropUseCustomOutputCheckBox.CheckedChanged += cropUseCustomOutputCheckBox_CheckedChanged;
+            cropOutputDirectoryTextBox = new TextBox { Dock = DockStyle.Fill, ReadOnly = true, Enabled = false, Anchor = AnchorStyles.Left | AnchorStyles.Right };
+            cropBrowseOutputButton = new Button { Text = "选择文件夹", Anchor = AnchorStyles.None, Size = new Size(102, 34), Enabled = false };
+            cropBrowseOutputButton.Click += cropBrowseOutputButton_Click;
+            cropStartButton = new Button { Text = "开始裁切", Anchor = AnchorStyles.None, Size = new Size(116, 38) };
+            cropStartButton.Click += cropStartButton_Click;
+            outputLayout.Controls.Add(cropUseCustomOutputCheckBox, 0, 0);
+            outputLayout.SetColumnSpan(cropUseCustomOutputCheckBox, 3);
+            outputLayout.Controls.Add(cropOutputDirectoryTextBox, 0, 1);
+            outputLayout.SetColumnSpan(cropOutputDirectoryTextBox, 2);
+            outputLayout.Controls.Add(cropBrowseOutputButton, 2, 1);
+            outputGroup.Controls.Add(outputLayout);
+
+            var actionPanel = new Panel { Dock = DockStyle.Fill };
+            actionPanel.Controls.Add(cropStartButton);
+            cropStartButton.Location = new System.Drawing.Point(18, 40);
+
+            var logGroup = new GroupBox { Text = "处理日志", Dock = DockStyle.Fill };
+            cropLogTextBox = CreateLogTextBox();
+            logGroup.Controls.Add(cropLogTextBox);
+
+            layout.Controls.Add(imageGroup, 0, 0);
+            layout.Controls.Add(modeGroup, 1, 0);
+            layout.Controls.Add(outputGroup, 0, 1);
+            layout.Controls.Add(actionPanel, 1, 1);
+            layout.Controls.Add(logGroup, 0, 2);
+            layout.SetColumnSpan(logGroup, 2);
+            return layout;
         }
 
         private Control CreateJdDetailsLayout()
@@ -199,7 +329,7 @@ namespace PigResizeF
             var layout = new TableLayoutPanel
             {
                 ColumnCount = 2,
-                RowCount = 2,
+                RowCount = 3,
                 Dock = DockStyle.Fill,
                 Padding = new Padding(5)
             };
@@ -207,6 +337,7 @@ namespace PigResizeF
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 260F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 154F));
 
             var imageGroup = new GroupBox { Text = "详情图片", Dock = DockStyle.Fill };
             jdListBox = new ListBox
@@ -267,10 +398,16 @@ namespace PigResizeF
             jdPreviewCanvas = new JdPreviewCanvas { Dock = DockStyle.Fill };
             previewGroup.Controls.Add(jdPreviewCanvas);
 
+            var logGroup = new GroupBox { Text = "处理日志", Dock = DockStyle.Fill };
+            jdLogTextBox = CreateLogTextBox();
+            logGroup.Controls.Add(jdLogTextBox);
+
             layout.Controls.Add(imageGroup, 0, 0);
             layout.Controls.Add(actionGroup, 1, 0);
             layout.Controls.Add(previewGroup, 0, 1);
             layout.SetColumnSpan(previewGroup, 2);
+            layout.Controls.Add(logGroup, 0, 2);
+            layout.SetColumnSpan(logGroup, 2);
             UpdateJdMoveButtons();
             return layout;
         }
@@ -309,10 +446,7 @@ namespace PigResizeF
             StyleGroupBox(groupBox1, surface, text);
             StyleGroupBox(groupBox2, surface, text);
             StyleListBox(listBoxFiles, surface, text);
-            richTextBoxLog.BackColor = surface;
-            richTextBoxLog.ForeColor = text;
-            richTextBoxLog.BorderStyle = BorderStyle.FixedSingle;
-            richTextBoxLog.Font = new System.Drawing.Font("Consolas", 9F);
+            StyleLogTextBox(richTextBoxLog, surface, text);
 
             foreach (var radioButton in new[] { r1440f, r1440c, r800f, rspct })
             {
@@ -325,12 +459,45 @@ namespace PigResizeF
             StyleButton(buttonClearList, System.Drawing.Color.FromArgb(254, 226, 226), System.Drawing.Color.FromArgb(185, 28, 28));
             StyleButton(buttonAddFolder, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
 
+            ApplyCropVisualStyle(surface, text, canvas);
             ApplyJdVisualStyle(surface, text, canvas);
+        }
+
+        private void ApplyCropVisualStyle(System.Drawing.Color surface, System.Drawing.Color text, System.Drawing.Color canvas)
+        {
+            var cropPage = mainTabs.TabPages[1];
+            var layout = (TableLayoutPanel)cropPage.Controls[0];
+            layout.Padding = new Padding(14);
+            layout.BackColor = canvas;
+            layout.ColumnStyles[1].Width = 214;
+
+            foreach (Control control in layout.Controls)
+            {
+                if (control is GroupBox groupBox)
+                {
+                    StyleGroupBox(groupBox, surface, text);
+                }
+            }
+
+            StyleDataGridView(cropGridView, surface, text);
+            StyleLogTextBox(cropLogTextBox, surface, text);
+            foreach (var radioButton in new[] { cropAutoRadioButton, cropRandomRadioButton, cropGrid2RadioButton, cropGrid3RadioButton })
+            {
+                radioButton.BackColor = surface;
+                radioButton.ForeColor = text;
+                radioButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
+            }
+            cropQuickModeCheckBox.BackColor = surface;
+            cropQuickModeCheckBox.ForeColor = text;
+            cropOutputDirectoryTextBox.BackColor = System.Drawing.Color.FromArgb(248, 250, 252);
+            cropOutputDirectoryTextBox.ForeColor = text;
+            StyleButton(cropBrowseOutputButton, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
+            StyleButton(cropStartButton, System.Drawing.Color.FromArgb(37, 99, 235), System.Drawing.Color.White);
         }
 
         private void ApplyJdVisualStyle(System.Drawing.Color surface, System.Drawing.Color text, System.Drawing.Color canvas)
         {
-            var jdPage = mainTabs.TabPages[1];
+            var jdPage = mainTabs.TabPages[2];
             var layout = (TableLayoutPanel)jdPage.Controls[0];
             layout.Padding = new Padding(14);
             layout.BackColor = canvas;
@@ -347,6 +514,7 @@ namespace PigResizeF
 
             StyleListBox(jdListBox, surface, text);
             jdPreviewCanvas.BackColor = System.Drawing.Color.FromArgb(252, 253, 255);
+            StyleLogTextBox(jdLogTextBox, surface, text);
             StyleButton(buttonJdMoveUp, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
             StyleButton(buttonJdMoveDown, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
             StyleButton(buttonJdPreview, System.Drawing.Color.FromArgb(15, 118, 110), System.Drawing.Color.White);
@@ -368,6 +536,44 @@ namespace PigResizeF
             listBox.BorderStyle = BorderStyle.FixedSingle;
             listBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             listBox.ItemHeight = 28;
+        }
+
+        private static void StyleDataGridView(DataGridView gridView, System.Drawing.Color surface, System.Drawing.Color text)
+        {
+            gridView.BackgroundColor = surface;
+            gridView.GridColor = System.Drawing.Color.FromArgb(226, 232, 240);
+            gridView.BorderStyle = BorderStyle.FixedSingle;
+            gridView.EnableHeadersVisualStyles = false;
+            gridView.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            gridView.ColumnHeadersDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(241, 245, 249);
+            gridView.ColumnHeadersDefaultCellStyle.ForeColor = text;
+            gridView.ColumnHeadersDefaultCellStyle.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
+            gridView.DefaultCellStyle.BackColor = surface;
+            gridView.DefaultCellStyle.ForeColor = text;
+            gridView.DefaultCellStyle.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
+            gridView.DefaultCellStyle.SelectionBackColor = System.Drawing.Color.FromArgb(219, 234, 254);
+            gridView.DefaultCellStyle.SelectionForeColor = text;
+            gridView.RowTemplate.Height = 30;
+        }
+
+        private static RichTextBox CreateLogTextBox()
+        {
+            return new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                ScrollBars = RichTextBoxScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                HideSelection = false
+            };
+        }
+
+        private static void StyleLogTextBox(RichTextBox logTextBox, System.Drawing.Color surface, System.Drawing.Color text)
+        {
+            logTextBox.BackColor = surface;
+            logTextBox.ForeColor = text;
+            logTextBox.BorderStyle = BorderStyle.FixedSingle;
+            logTextBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
         }
 
         private static void StyleButton(Button button, System.Drawing.Color backColor, System.Drawing.Color foreColor)
@@ -418,6 +624,449 @@ namespace PigResizeF
             return e.Data?.GetDataPresent(DataFormats.FileDrop) == true ? DragDropEffects.Copy : DragDropEffects.None;
         }
 
+        private void cropGridView_DragEnter(object? sender, DragEventArgs e)
+        {
+            e.Effect = GetJdDragEffect(e);
+        }
+
+        private async void cropGridView_DragDrop(object? sender, DragEventArgs e)
+        {
+            if (e.Data?.GetDataPresent(DataFormats.FileDrop) != true || e.Data.GetData(DataFormats.FileDrop) is not string[] files)
+            {
+                return;
+            }
+
+            var addedFiles = AddCropFiles(files);
+            await DetectCropModesAsync(addedFiles);
+            if (cropQuickModeCheckBox.Checked && addedFiles.Length > 0)
+            {
+                await StartCropAsync(addedFiles);
+            }
+        }
+
+        private string[] AddCropFiles(IEnumerable<string> files)
+        {
+            var newFiles = files
+                .Where(IsImageFile)
+                .Where(path => !cropFilePaths.Contains(path, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            cropFilePaths.AddRange(newFiles);
+            var selectedMode = GetCropMode();
+            foreach (var filePath in newFiles)
+            {
+                cropFileModes[filePath] = selectedMode;
+            }
+            RefreshCropFileList();
+            if (newFiles.Length > 0)
+            {
+                LogMessage($"图片裁切：已添加 {newFiles.Length} 张图片。", LogLevel.Info);
+            }
+            return newFiles;
+        }
+
+        private void RefreshCropFileList()
+        {
+            cropGridRefreshing = true;
+            try
+            {
+                cropGridView.Rows.Clear();
+                foreach (var filePath in cropFilePaths)
+                {
+                    var mode = cropFileModes.TryGetValue(filePath, out var value) ? value : CropMode.Auto;
+                    var rowIndex = cropGridView.Rows.Add(Path.GetFileName(filePath), GetCropModeDisplay(mode));
+                    cropGridView.Rows[rowIndex].Tag = filePath;
+                }
+            }
+            finally
+            {
+                cropGridRefreshing = false;
+            }
+        }
+
+        private void cropGridView_CurrentCellDirtyStateChanged(object? sender, EventArgs e)
+        {
+            if (cropGridView.IsCurrentCellDirty)
+            {
+                cropGridView.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        }
+
+        private void cropGridView_CellValueChanged(object? sender, DataGridViewCellEventArgs e)
+        {
+            if (cropGridRefreshing || e.RowIndex < 0 || e.ColumnIndex != 1 || cropGridView.Rows[e.RowIndex].Tag is not string filePath)
+            {
+                return;
+            }
+
+            var selectedMode = ParseCropMode(cropGridView.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString());
+            cropFileModes[filePath] = selectedMode;
+            if (selectedMode == CropMode.Auto)
+            {
+                _ = DetectCropModesAsync(new[] { filePath });
+            }
+        }
+
+        private async void cropModeRadioButton_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (sender is RadioButton { Checked: true } && !cropIsProcessing)
+            {
+                await ApplySelectedCropModeToAllAsync();
+            }
+        }
+
+        private async Task ApplySelectedCropModeToAllAsync()
+        {
+            var selectedMode = GetCropMode();
+            foreach (var filePath in cropFilePaths)
+            {
+                cropFileModes[filePath] = selectedMode;
+            }
+            RefreshCropFileList();
+            if (selectedMode == CropMode.Auto)
+            {
+                await DetectCropModesAsync(cropFilePaths.ToArray());
+            }
+        }
+
+        private async Task DetectCropModesAsync(IEnumerable<string> files)
+        {
+            var pendingFiles = files
+                .Where(path => cropFileModes.TryGetValue(path, out var mode) && mode == CropMode.Auto)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (pendingFiles.Length == 0)
+            {
+                return;
+            }
+
+            var detectionResults = await Task.Run(() => pendingFiles
+                .Select(path => (Path: path, Mode: TryDetectCropMode(path)))
+                .ToArray());
+            foreach (var result in detectionResults)
+            {
+                if (result.Mode.HasValue && cropFileModes.TryGetValue(result.Path, out var currentMode) && currentMode == CropMode.Auto)
+                {
+                    cropFileModes[result.Path] = result.Mode.Value;
+                }
+            }
+            RefreshCropFileList();
+        }
+
+        private static CropMode? TryDetectCropMode(string filePath)
+        {
+            try
+            {
+                using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(filePath);
+                OrientImage(image);
+                return DetectCropMode(image);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        private static string GetCropModeDisplay(CropMode mode)
+        {
+            return mode switch
+            {
+                CropMode.Auto => "自动识别",
+                CropMode.RandomCorners => "四角乱切",
+                CropMode.Grid2 => "四宫格拆分",
+                CropMode.Grid3 => "九宫格拆分",
+                _ => "自动识别"
+            };
+        }
+
+        private static CropMode ParseCropMode(string? modeText)
+        {
+            return modeText switch
+            {
+                "四角乱切" => CropMode.RandomCorners,
+                "四宫格拆分" => CropMode.Grid2,
+                "九宫格拆分" => CropMode.Grid3,
+                _ => CropMode.Auto
+            };
+        }
+
+        private void cropUseCustomOutputCheckBox_CheckedChanged(object? sender, EventArgs e)
+        {
+            var useCustomOutput = cropUseCustomOutputCheckBox.Checked && !cropIsProcessing;
+            cropOutputDirectoryTextBox.Enabled = useCustomOutput;
+            cropBrowseOutputButton.Enabled = useCustomOutput;
+        }
+
+        private void cropBrowseOutputButton_Click(object? sender, EventArgs e)
+        {
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = "选择裁切图片保存位置",
+                UseDescriptionForTitle = true,
+                InitialDirectory = Directory.Exists(cropOutputDirectoryTextBox.Text)
+                    ? cropOutputDirectoryTextBox.Text
+                    : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)
+            };
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+            {
+                cropOutputDirectoryTextBox.Text = dialog.SelectedPath;
+            }
+        }
+
+        private async void cropStartButton_Click(object? sender, EventArgs e)
+        {
+            await StartCropAsync(cropFilePaths.ToArray());
+        }
+
+        private async Task StartCropAsync(IEnumerable<string> sourceFiles)
+        {
+            var files = sourceFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (files.Length == 0)
+            {
+                MessageBox.Show("请先拖拽图片到列表。", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (cropIsProcessing)
+            {
+                return;
+            }
+
+            string? customOutputDirectory = null;
+            if (cropUseCustomOutputCheckBox.Checked)
+            {
+                customOutputDirectory = cropOutputDirectoryTextBox.Text.Trim();
+                if (string.IsNullOrWhiteSpace(customOutputDirectory))
+                {
+                    MessageBox.Show("请选择自定义保存路径，或关闭自定义保存路径。", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+            }
+
+            var jobs = files
+                .Select(path => new CropJob(path, cropFileModes.TryGetValue(path, out var mode) ? mode : CropMode.Auto))
+                .ToArray();
+            cropIsProcessing = true;
+            SetCropControlsEnabled(false);
+            LogMessage($"图片裁切：开始处理 {jobs.Length} 张图片。", LogLevel.Processing);
+            try
+            {
+                var result = await Task.Run(() => CropImages(jobs, customOutputDirectory));
+                var failedSet = result.FailedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                cropFilePaths.RemoveAll(path => !failedSet.Contains(path));
+                foreach (var filePath in files.Where(path => !failedSet.Contains(path)))
+                {
+                    cropFileModes.Remove(filePath);
+                }
+                RefreshCropFileList();
+
+                if (result.FailedFiles.Count == 0)
+                {
+                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片。", LogLevel.Success);
+                    MessageBox.Show($"已输出 {result.OutputCount} 张图片。", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片，{result.FailedFiles.Count} 张未完成。", LogLevel.Warning);
+                    MessageBox.Show($"已输出 {result.OutputCount} 张图片。\r\n以下文件未完成，已保留在列表：\r\n{string.Join("\r\n", result.FailedFiles.Select(Path.GetFileName))}", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"图片裁切失败：{ex.Message}", LogLevel.Error);
+                MessageBox.Show($"裁切失败：{ex.Message}", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                cropIsProcessing = false;
+                SetCropControlsEnabled(true);
+            }
+        }
+
+        private CropMode GetCropMode()
+        {
+            return cropAutoRadioButton.Checked
+                ? CropMode.Auto
+                : cropGrid2RadioButton.Checked
+                ? CropMode.Grid2
+                : cropGrid3RadioButton.Checked
+                    ? CropMode.Grid3
+                    : CropMode.RandomCorners;
+        }
+
+        private void SetCropControlsEnabled(bool enabled)
+        {
+            cropGridView.Enabled = enabled;
+            cropAutoRadioButton.Enabled = enabled;
+            cropRandomRadioButton.Enabled = enabled;
+            cropGrid2RadioButton.Enabled = enabled;
+            cropGrid3RadioButton.Enabled = enabled;
+            cropQuickModeCheckBox.Enabled = enabled;
+            cropUseCustomOutputCheckBox.Enabled = enabled;
+            cropStartButton.Enabled = enabled;
+            cropOutputDirectoryTextBox.Enabled = enabled && cropUseCustomOutputCheckBox.Checked;
+            cropBrowseOutputButton.Enabled = enabled && cropUseCustomOutputCheckBox.Checked;
+        }
+
+        private static CropBatchResult CropImages(IEnumerable<CropJob> jobs, string? customOutputDirectory)
+        {
+            var outputCount = 0;
+            var failedFiles = new List<string>();
+            foreach (var job in jobs)
+            {
+                try
+                {
+                    var outputDirectory = customOutputDirectory ?? Path.GetDirectoryName(job.Path) ?? Environment.CurrentDirectory;
+                    Directory.CreateDirectory(outputDirectory);
+                    outputCount += CropImage(job.Path, outputDirectory, job.Mode);
+                }
+                catch (Exception)
+                {
+                    failedFiles.Add(job.Path);
+                }
+            }
+            return new CropBatchResult(outputCount, failedFiles);
+        }
+
+        private static int CropImage(string inputFilePath, string outputDirectory, CropMode mode)
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(inputFilePath);
+            OrientImage(image);
+            var originalName = Path.GetFileNameWithoutExtension(inputFilePath);
+            var encoder = new JpegEncoder { Quality = 100 };
+
+            var resolvedMode = mode == CropMode.Auto ? DetectCropMode(image) : mode;
+            return resolvedMode switch
+            {
+                CropMode.RandomCorners => CropRandomCorners(image, originalName, outputDirectory, encoder),
+                CropMode.Grid2 => CropGrid(image, originalName, outputDirectory, encoder, 2),
+                CropMode.Grid3 => CropGrid(image, originalName, outputDirectory, encoder, 3),
+                _ => throw new InvalidOperationException("未知裁切模式。")
+            };
+        }
+
+        private static int CropRandomCorners(Image<Rgba32> image, string originalName, string outputDirectory, JpegEncoder encoder)
+        {
+            var maxWidth = Math.Max(1, (int)Math.Floor(image.Width * 0.85));
+            var maxHeight = Math.Max(1, (int)Math.Floor(image.Height * 0.85));
+            var cropWidth = Math.Max(1, Math.Min(maxWidth, (int)Math.Floor(maxHeight * 3D / 4D)));
+            var cropHeight = Math.Max(1, Math.Min(maxHeight, (int)Math.Round(cropWidth * 4D / 3D)));
+            var positions = new[]
+            {
+                new SixLabors.ImageSharp.Point(0, 0),
+                new SixLabors.ImageSharp.Point(image.Width - cropWidth, 0),
+                new SixLabors.ImageSharp.Point(0, image.Height - cropHeight),
+                new SixLabors.ImageSharp.Point(image.Width - cropWidth, image.Height - cropHeight)
+            };
+
+            for (var index = 0; index < positions.Length; index++)
+            {
+                using var cropped = image.Clone(context => context
+                    .Crop(new SixLabors.ImageSharp.Rectangle(positions[index].X, positions[index].Y, cropWidth, cropHeight))
+                    .Resize(1440, 1920));
+                cropped.Save(Path.Combine(outputDirectory, $"{originalName}-乱切{index + 1}.jpg"), encoder);
+            }
+            return positions.Length;
+        }
+
+        private static int CropGrid(Image<Rgba32> image, string originalName, string outputDirectory, JpegEncoder encoder, int gridSize)
+        {
+            if (image.Width < gridSize || image.Height < gridSize)
+            {
+                throw new InvalidOperationException("图片尺寸不足以进行宫格拆分。");
+            }
+
+            var index = 1;
+            for (var row = 0; row < gridSize; row++)
+            {
+                var top = row * image.Height / gridSize;
+                var bottom = (row + 1) * image.Height / gridSize;
+                for (var column = 0; column < gridSize; column++)
+                {
+                    var left = column * image.Width / gridSize;
+                    var right = (column + 1) * image.Width / gridSize;
+                    using var cropped = image.Clone(context => context.Crop(new SixLabors.ImageSharp.Rectangle(left, top, right - left, bottom - top)));
+                    cropped.Save(Path.Combine(outputDirectory, $"{originalName}-拆分{index++}.jpg"), encoder);
+                }
+            }
+            return gridSize * gridSize;
+        }
+
+        private static CropMode DetectCropMode(Image<Rgba32> image)
+        {
+            var grid3Scores = new[]
+            {
+                GetPeakSeamScore(image, true, image.Width / 3),
+                GetPeakSeamScore(image, true, image.Width * 2 / 3),
+                GetPeakSeamScore(image, false, image.Height / 3),
+                GetPeakSeamScore(image, false, image.Height * 2 / 3)
+            };
+            if (grid3Scores.Min() >= 8D && grid3Scores.Sum() >= 70D)
+            {
+                return CropMode.Grid3;
+            }
+
+            var grid2Scores = new[]
+            {
+                GetPeakSeamScore(image, true, image.Width / 2),
+                GetPeakSeamScore(image, false, image.Height / 2)
+            };
+            if (grid2Scores.Min() >= 12D && grid2Scores.Sum() >= 35D)
+            {
+                return CropMode.Grid2;
+            }
+
+            return CropMode.RandomCorners;
+        }
+
+        private static double GetPeakSeamScore(Image<Rgba32> image, bool vertical, int center)
+        {
+            var dimension = vertical ? image.Width : image.Height;
+            var searchRadius = Math.Max(12, (int)Math.Round(dimension * 0.012D));
+            var sampleStep = Math.Max(1, (vertical ? image.Height : image.Width) / 600);
+            var maxScore = 0D;
+
+            // A small search window tolerates thin separators that do not sit exactly on the fractional boundary.
+            for (var position = Math.Max(1, center - searchRadius); position < Math.Min(dimension, center + searchRadius + 1); position++)
+            {
+                var totalDifference = 0D;
+                var sampleCount = 0;
+                if (vertical)
+                {
+                    for (var y = 0; y < image.Height; y += sampleStep)
+                    {
+                        var left = image[position - 1, y];
+                        var right = image[position, y];
+                        totalDifference += (Math.Abs(left.R - right.R) + Math.Abs(left.G - right.G) + Math.Abs(left.B - right.B)) / 3D;
+                        sampleCount++;
+                    }
+                }
+                else
+                {
+                    for (var x = 0; x < image.Width; x += sampleStep)
+                    {
+                        var top = image[x, position - 1];
+                        var bottom = image[x, position];
+                        totalDifference += (Math.Abs(top.R - bottom.R) + Math.Abs(top.G - bottom.G) + Math.Abs(top.B - bottom.B)) / 3D;
+                        sampleCount++;
+                    }
+                }
+
+                maxScore = Math.Max(maxScore, totalDifference / sampleCount);
+            }
+            return maxScore;
+        }
+
+        private enum CropMode
+        {
+            Auto,
+            RandomCorners,
+            Grid2,
+            Grid3
+        }
+
+        private sealed record CropJob(string Path, CropMode Mode);
+        private sealed record CropBatchResult(int OutputCount, IReadOnlyList<string> FailedFiles);
+
         private void jdListBox_SelectedIndexChanged(object? sender, EventArgs e)
         {
             UpdateJdMoveButtons();
@@ -442,6 +1091,10 @@ namespace PigResizeF
                 .ToArray();
             jdFilePaths.AddRange(newFiles);
             RefreshJdFileList(selectedIndices);
+            if (newFiles.Length > 0)
+            {
+                LogMessage($"京东详情页：已添加 {newFiles.Length} 张图片。", LogLevel.Info);
+            }
         }
 
         private void buttonJdMoveUp_Click(object? sender, EventArgs e)
@@ -535,9 +1188,11 @@ namespace PigResizeF
             try
             {
                 jdPreviewCanvas.SetImages(jdFilePaths);
+                LogMessage($"京东详情页：已加载 {jdFilePaths.Count} 张图片预览。", LogLevel.Info);
             }
             catch (Exception ex)
             {
+                LogMessage($"京东详情页预览失败：{ex.Message}", LogLevel.Error);
                 MessageBox.Show($"无法生成预览：{ex.Message}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -560,14 +1215,17 @@ namespace PigResizeF
 
             buttonJdPreview.Enabled = false;
             buttonJdExport.Enabled = false;
+            LogMessage($"京东详情页：开始输出 {files.Length} 张图片。", LogLevel.Processing);
             try
             {
                 var outputCount = await Task.Run(() => ExportJdDetails(files, outputDirectory));
+                LogMessage($"京东详情页：已输出 {outputCount} 张图片。", LogLevel.Success);
                 MessageBox.Show($"已输出 {outputCount} 张图片。\r\n保存位置：{outputDirectory}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 ClearJdFiles();
             }
             catch (Exception ex)
             {
+                LogMessage($"京东详情页输出失败：{ex.Message}", LogLevel.Error);
                 MessageBox.Show($"输出失败：{ex.Message}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -656,7 +1314,7 @@ namespace PigResizeF
         {
             if (!droppedFilePaths.Any())
             {
-                LogMessage("������קͼƬ��ָ������", LogLevel.Error);
+                LogMessage("请先拖拽图片或指定文件夹。", LogLevel.Error);
                 return;
             }
 
@@ -664,18 +1322,18 @@ namespace PigResizeF
 
             // ���ð�ť����ֹ�ظ����
             buttonProcess.Enabled = false;
-            LogMessage("��ʼ����ͼƬ...", LogLevel.Info);
+            LogMessage("开始处理图片...", LogLevel.Info);
 
 
             // ���д���ͼƬ
             var tasks = droppedFilePaths.Select(filePath => ProcessImageAsync(filePath));
             await Task.WhenAll(tasks);
 
-            LogMessage("����ͼƬ������ϣ�", LogLevel.Success);
+            LogMessage("所有图片处理完成！", LogLevel.Success);
             
             droppedFilePaths.Clear();
             listBoxFiles.Items.Clear(); // ��� ListBox���Ա��������
-            LogMessage("ͼƬ�б�����ա�", LogLevel.Info);
+            LogMessage("图片列表已清空。", LogLevel.Info);
             // ���ð�ť
             buttonProcess.Enabled = true;
         }
@@ -687,25 +1345,25 @@ namespace PigResizeF
             {
                 targetSize = new Size(1440, 1440);
                 sname = "1440f";
-                LogMessage("Ŀ��ߴ�������Ϊ 1440x1440��", LogLevel.Info);
+                LogMessage("目标尺寸已设置为 1440x1440。", LogLevel.Info);
             }
             else if (r1440c.Checked)
             {
                 targetSize = new Size(1440, 1920);
                 sname = "1440c";
-                LogMessage("Ŀ��ߴ�������Ϊ 1440x1920��", LogLevel.Info);
+                LogMessage("目标尺寸已设置为 1440x1920。", LogLevel.Info);
             }
             else if (r800f.Checked)
             {
                 targetSize = new Size(800, 800);
                 sname = "800f";
-                LogMessage("Ŀ��ߴ�������Ϊ 800x800��", LogLevel.Info);
+                LogMessage("目标尺寸已设置为 800x800。", LogLevel.Info);
             }
             else if (rspct.Checked)
             {
                 targetSize = new Size(1440, 2160);
                 sname = "��ͼ";
-                LogMessage("Ŀ��ߴ�������Ϊ 1440*2160��", LogLevel.Info);
+                LogMessage("目标尺寸已设置为 1440x2160。", LogLevel.Info);
             }
         }
 
@@ -721,7 +1379,7 @@ namespace PigResizeF
                     string outputFileName = $"{originalFileName}_{sname}.jpg";
                     string outputFilePath = Path.Combine(Path.GetDirectoryName(inputFilePath), outputFileName);
 
-                    LogMessage($"[*] ���ڴ���: {Path.GetFileName(inputFilePath)}", LogLevel.Processing);
+                    LogMessage($"[*] 正在处理: {Path.GetFileName(inputFilePath)}", LogLevel.Processing);
 
                     // 1. �����ߴ粢����ɫ����
                     var resizedImage = ResizeImageWithPadding(image, targetSize);
@@ -729,12 +1387,12 @@ namespace PigResizeF
                     // 2. ����Ϊ JPG
                     await resizedImage.SaveAsync(outputFilePath, new JpegEncoder { Quality = 90 }); // Quality: 0-100��90�ǽϺõ�ƽ��
 
-                    LogMessage($"    -> �ѱ��浽: {outputFileName} (�ߴ�: {resizedImage.Width}x{resizedImage.Height})", LogLevel.Success);
+                    LogMessage($"    -> 已保存到: {outputFileName} (尺寸: {resizedImage.Width}x{resizedImage.Height})", LogLevel.Success);
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"    [!] �������� - {Path.GetFileName(inputFilePath)}: {ex.Message}", LogLevel.Error);
+                LogMessage($"    [!] 处理失败 - {Path.GetFileName(inputFilePath)}: {ex.Message}", LogLevel.Error);
             }
         }
 
@@ -768,7 +1426,7 @@ namespace PigResizeF
         }
         
 // ����һ����������������ͼƬ��ת
-        private Image<Rgba32> OrientImage(Image<Rgba32> image)
+        private static Image<Rgba32> OrientImage(Image<Rgba32> image)
         {
             // Check if EXIF information contains the Orientation tag  
             if (image.Metadata.ExifProfile != null &&
@@ -823,10 +1481,13 @@ namespace PigResizeF
 
         private void LogMessage(string message, LogLevel level)
         {
-            // �� UI �߳��ϸ��� RichTextBox
-            if (richTextBoxLog.InvokeRequired)
+            if (IsDisposed || Disposing)
             {
-                richTextBoxLog.Invoke(new Action(() => AppendLog(message, level)));
+                return;
+            }
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => AppendLog(message, level)));
             }
             else
             {
@@ -835,6 +1496,27 @@ namespace PigResizeF
         }
 
         private void AppendLog(string message, LogLevel level)
+        {
+            foreach (var logTextBox in GetLogTextBoxes())
+            {
+                AppendLog(logTextBox, message, level);
+            }
+        }
+
+        private IEnumerable<RichTextBox> GetLogTextBoxes()
+        {
+            yield return richTextBoxLog;
+            if (cropLogTextBox != null)
+            {
+                yield return cropLogTextBox;
+            }
+            if (jdLogTextBox != null)
+            {
+                yield return jdLogTextBox;
+            }
+        }
+
+        private static void AppendLog(RichTextBox logTextBox, string message, LogLevel level)
         {
             string prefix = "";
             System.Drawing.Color color = System.Drawing.Color.Black; // Ĭ����ɫ
@@ -867,17 +1549,17 @@ namespace PigResizeF
             string formattedMessage = $"{DateTime.Now:HH:mm:ss} {prefix}{message}\r\n";
 
             // ��¼��ɫ
-            int startIndex = richTextBoxLog.Text.Length;
-            richTextBoxLog.AppendText(formattedMessage);
-            int endIndex = richTextBoxLog.Text.Length;
+            int startIndex = logTextBox.Text.Length;
+            logTextBox.AppendText(formattedMessage);
+            int endIndex = logTextBox.Text.Length;
 
-            richTextBoxLog.Select(startIndex, endIndex - startIndex);
-            richTextBoxLog.SelectionColor = color;
-            richTextBoxLog.SelectionCharOffset = 0; // �ָ�Ĭ��ƫ��
-            richTextBoxLog.DeselectAll(); // ȡ��ѡ��
+            logTextBox.Select(startIndex, endIndex - startIndex);
+            logTextBox.SelectionColor = color;
+            logTextBox.SelectionCharOffset = 0; // �ָ�Ĭ��ƫ��
+            logTextBox.DeselectAll(); // ȡ��ѡ��
 
             // �Զ��������ײ�
-            richTextBoxLog.ScrollToCaret();
+            logTextBox.ScrollToCaret();
         }
 
         // �ڴ������ʱ�� RadioButton ״̬�ı�ʱ����Ŀ��ߴ磨��ѡ��
@@ -894,7 +1576,7 @@ namespace PigResizeF
             
             droppedFilePaths.Clear();
             listBoxFiles.Items.Clear(); // ��� ListBox���Ա��������
-            LogMessage("ͼƬ�б�����ա�", LogLevel.Info);
+            LogMessage("图片列表已清空。", LogLevel.Info);
         }
     }
 
