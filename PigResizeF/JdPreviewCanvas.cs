@@ -18,8 +18,10 @@ using ImageSharpSize = SixLabors.ImageSharp.Size;
 
 namespace PigResizeF
 {
+    // 京东详情页长图预览控件：只绘制可见区域，并缓存少量缩略图以控制内存占用。
     internal sealed class JdPreviewCanvas : ScrollableControl
     {
+        // 缩略图宽度和缓存数量共同限制预览时的解码与内存压力。
         private const int ThumbnailWidth = 1024;
         private const int MaxCachedImages = 4;
         private readonly List<PreviewItem> items = new List<PreviewItem>();
@@ -43,6 +45,7 @@ namespace PigResizeF
 
         public void SetImages(IEnumerable<string> paths)
         {
+            // 仅读取图片信息来计算长图布局，不在此处拼接或解码完整图片。
             var newItems = new List<PreviewItem>();
             foreach (var path in paths)
             {
@@ -53,6 +56,7 @@ namespace PigResizeF
                 newItems.Add(new PreviewItem(path, width, height, orientation));
             }
 
+            // 仅调整排序时复用缓存，避免用户移动列表后重新加载缩略图。
             var sameImageSet = items.Count == newItems.Count &&
                 items.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                     .SequenceEqual(newItems.Select(item => item.Path).OrderBy(path => path, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
@@ -94,6 +98,7 @@ namespace PigResizeF
         {
             if ((ModifierKeys & Keys.Control) == Keys.Control && compositionWidth > 0)
             {
+                // Ctrl + 滚轮以鼠标所在内容位置为锚点缩放，普通滚轮仍交给滚动容器。
                 var oldZoom = zoom;
                 zoom = Math.Clamp(zoom * (e.Delta > 0 ? 1.15F : 1F / 1.15F), 0.05F, 2F);
                 if (Math.Abs(oldZoom - zoom) > float.Epsilon)
@@ -125,6 +130,7 @@ namespace PigResizeF
             var y = 0L;
             var displayWidth = Math.Max(1, (int)Math.Round(compositionWidth * zoom));
 
+            // 超长预览只请求和绘制当前视口相交的图片。
             foreach (var item in items)
             {
                 var itemHeight = Math.Max(1L, (long)Math.Round(item.Height * (double)compositionWidth / item.Width));
@@ -177,6 +183,7 @@ namespace PigResizeF
                 generation = cacheGeneration;
             }
 
+            // 解码放到后台线程，绘制线程只负责显示已有缓存或占位块。
             _ = Task.Run(() => LoadThumbnailAsync(item, generation));
         }
 
@@ -197,7 +204,7 @@ namespace PigResizeF
             }
             catch (Exception)
             {
-                // A bad source image should not block repainting the remaining images.
+                // 单张源图损坏不影响其余图片的预览。
             }
 
             if (IsDisposed || !IsHandleCreated)
@@ -235,6 +242,7 @@ namespace PigResizeF
 
                 imageCache[path] = bitmap;
                 cacheOrder.AddLast(path);
+                // 使用最近最少使用顺序淘汰旧缩略图，防止连续滚动占满内存。
                 while (cacheOrder.Count > MaxCachedImages)
                 {
                     var oldest = cacheOrder.First!.Value;
@@ -268,6 +276,7 @@ namespace PigResizeF
 
         private static Bitmap CreateThumbnail(PreviewItem item)
         {
+            // 解码阶段直接请求目标尺寸，避免先加载大图再缩放。
             var targetWidth = Math.Min(ThumbnailWidth, item.Width);
             var targetHeight = Math.Max(1, (int)Math.Round(item.Height * (double)targetWidth / item.Width));
             var decoderOptions = new DecoderOptions
@@ -367,6 +376,7 @@ namespace PigResizeF
         {
             lock (cacheLock)
             {
+                // 代次递增后，后台尚未完成的旧任务会在回到 UI 线程时被丢弃。
                 cacheGeneration++;
                 foreach (var bitmap in imageCache.Values)
                 {

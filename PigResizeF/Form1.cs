@@ -4,7 +4,7 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing; // ���� Color.White
+using System.Drawing; // WinForms 绘图类型
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -16,18 +16,20 @@ using System.Windows.Forms;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using Color = SixLabors.ImageSharp.Color;
-using Size = System.Drawing.Size; // ImageSharp �� Color
+using Size = System.Drawing.Size; // 避免与 ImageSharp.Size 重名
 
 namespace PigResizeF
 {
     public partial class Form1 : Form
     {
 
+        // 三个页签各自维护输入文件，避免切换功能时互相影响。
         private List<string> droppedFilePaths = new List<string>();
         private readonly List<string> jdFilePaths = new List<string>();
         private readonly List<string> cropFilePaths = new List<string>();
+        // 裁切页按图片保存模式，支持自动识别后逐项手动覆盖。
         private readonly Dictionary<string, CropMode> cropFileModes = new(StringComparer.OrdinalIgnoreCase);
-        private Size targetSize; // ���ڴ洢��ǰѡ���Ŀ��ߴ�
+        private Size targetSize; // 当前常规转换的目标尺寸
         private string sname = "";
         private ListBox jdListBox = null!;
         private JdPreviewCanvas jdPreviewCanvas = null!;
@@ -54,12 +56,12 @@ namespace PigResizeF
         public Form1()
         {
             InitializeComponent();
-            richTextBoxLog.Rtf = ""; // ��ʼ��Ϊ�գ���ȷ����������Ϊ RTF ģʽ
-            // ���� RichTextBox Ϊֻ���������ù�����
+            richTextBoxLog.Rtf = ""; // 用 RTF 空内容初始化，保留后续彩色日志能力
+            // 常规转换日志只读，三个页签通过 LogMessage 同步显示。
             richTextBoxLog.ReadOnly = true;
             richTextBoxLog.ScrollBars = RichTextBoxScrollBars.Vertical;
 
-            // ע���Ϸ��¼�
+            // 常规转换页支持将文件直接拖放到列表或空白区域。
             tableLayoutPanel1.DragEnter += PanelDropTarget_DragEnter;
             tableLayoutPanel1.DragDrop += PanelDropTarget_DragDrop;
 
@@ -116,25 +118,25 @@ namespace PigResizeF
             }
             catch (HttpRequestException)
             {
-                // Update checks must never interfere with the image workflow.
+                // 更新服务不可用时不影响本地图片处理。
             }
             catch (TaskCanceledException)
             {
-                // A timeout or closing window is treated as an unavailable update service.
+                // 超时或窗口关闭时静默结束检查。
             }
             catch (JsonException)
             {
-                // Ignore malformed release data rather than showing an unhelpful startup error.
+                // 忽略异常的 Release 数据，避免启动时出现无意义提示。
             }
         }
 
-        // ��ק����ʱ����
+        // 拖入文件时只接受资源管理器提供的文件列表。
         private void PanelDropTarget_DragEnter(object sender, DragEventArgs e)
         {
-            // �����ק�������Ƿ�����ļ�
+            // 根据数据类型决定鼠标指针效果。
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
-                e.Effect = DragDropEffects.Copy; // �������Ʋ���
+                e.Effect = DragDropEffects.Copy;
             }
             else
             {
@@ -142,37 +144,32 @@ namespace PigResizeF
             }
         }
 
-        // ��ק���ʱ����
+        // 常规转换页：追加新文件，已存在的路径不重复加入。
         private void PanelDropTarget_DragDrop(object sender, DragEventArgs e)
         {
-            // ��ȡ��ק���ļ�·��
             string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
 
-            // ���˳�ͼƬ�ļ���������չ�����жϣ�
+            // 仅保留支持的图片扩展名。
             var validImageFiles = files.Where(f => IsImageFile(f)).ToList();
 
             if (validImageFiles.Any())
             {
-                // *** �޸ĵ㣺�Ƴ� .Clear() ***
-                // droppedFilePaths.Clear(); // �Ƴ����У�ʵ��׷��Ч��
-
-                // ���µ���ЧͼƬ�ļ����ӵ������б���
                 foreach (var filePath in validImageFiles)
                 {
-                    // ����Ƿ��Ѵ��ڣ������ظ�����
+                    // 保留先前队列，重复路径只显示一次。
                     if (!droppedFilePaths.Contains(filePath))
                     {
                         droppedFilePaths.Add(filePath);
-                        listBoxFiles.Items.Add(filePath); // ֻ�����ļ���
+                        listBoxFiles.Items.Add(filePath);
                     }
                 }
 
 
                 LogMessage($"成功追加 {validImageFiles.Count} 张图片。", LogLevel.Info);
-                // ��ӡ׷�ӵ��ļ�����������־ˢ��������ֻ��ӡ�����ӵ�
+                // 逐项记录拖入文件，便于核对待转换队列。
                 foreach (var filePath in validImageFiles)
                 {
-                    if (droppedFilePaths.Contains(filePath) && droppedFilePaths.Count(p => p == filePath) == 1) // ȷ����������ӵ�
+                    if (droppedFilePaths.Contains(filePath) && droppedFilePaths.Count(p => p == filePath) == 1)
                     {
                         LogMessage($"  + {Path.GetFileName(filePath)}", LogLevel.Info);
                     }
@@ -186,7 +183,7 @@ namespace PigResizeF
         }
 
 
-        // �ж��Ƿ���ͼƬ�ļ�
+        // 保持与三个拖放页一致的图片格式白名单。
         private bool IsImageFile(string filePath)
         {
             string extension = Path.GetExtension(filePath)?.ToLower();
@@ -195,6 +192,7 @@ namespace PigResizeF
 
         private void InitializeAdditionalTabs()
         {
+            // 设计器生成的是常规转换页，运行时再组合三个功能页签。
             Controls.Remove(tableLayoutPanel1);
 
             mainTabs = new TabControl { Dock = DockStyle.Fill };
@@ -216,6 +214,7 @@ namespace PigResizeF
 
         private Control CreateImageCropLayout()
         {
+            // 上方管理图片与模式，中间设置输出目录，底部保留完整日志。
             var layout = new TableLayoutPanel
             {
                 ColumnCount = 2,
@@ -326,6 +325,7 @@ namespace PigResizeF
 
         private Control CreateJdDetailsLayout()
         {
+            // 京东页保留图片排序区、长图预览区和独立日志区。
             var layout = new TableLayoutPanel
             {
                 ColumnCount = 2,
@@ -414,6 +414,7 @@ namespace PigResizeF
 
         private void ApplyVisualStyle()
         {
+            // 统一三页的字体、色彩和控件边框，布局控件仍由各页自行创建。
             var canvas = System.Drawing.Color.FromArgb(245, 247, 250);
             var surface = System.Drawing.Color.White;
             var text = System.Drawing.Color.FromArgb(30, 41, 59);
@@ -637,6 +638,7 @@ namespace PigResizeF
             }
 
             var addedFiles = AddCropFiles(files);
+            // 先完成识别再启动快速模式，确保显示模式与实际输出一致。
             await DetectCropModesAsync(addedFiles);
             if (cropQuickModeCheckBox.Checked && addedFiles.Length > 0)
             {
@@ -731,6 +733,7 @@ namespace PigResizeF
 
         private async Task DetectCropModesAsync(IEnumerable<string> files)
         {
+            // 只处理仍标记为自动识别的图片，手动选择的模式不能被后台任务覆盖。
             var pendingFiles = files
                 .Where(path => cropFileModes.TryGetValue(path, out var mode) && mode == CropMode.Auto)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -740,6 +743,7 @@ namespace PigResizeF
                 return;
             }
 
+            // 识别需读取图片像素，放入后台线程避免拖放操作阻塞界面。
             var detectionResults = await Task.Run(() => pendingFiles
                 .Select(path => (Path: path, Mode: TryDetectCropMode(path)))
                 .ToArray());
@@ -842,6 +846,7 @@ namespace PigResizeF
                 }
             }
 
+            // 处理前冻结每张图片的模式，处理中用户对列表的操作不会影响本批输出。
             var jobs = files
                 .Select(path => new CropJob(path, cropFileModes.TryGetValue(path, out var mode) ? mode : CropMode.Auto))
                 .ToArray();
@@ -911,6 +916,7 @@ namespace PigResizeF
         {
             var outputCount = 0;
             var failedFiles = new List<string>();
+            // 顺序处理大图，避免多张高分辨率图片同时解码导致内存峰值过高。
             foreach (var job in jobs)
             {
                 try
@@ -934,6 +940,7 @@ namespace PigResizeF
             var originalName = Path.GetFileNameWithoutExtension(inputFilePath);
             var encoder = new JpegEncoder { Quality = 100 };
 
+            // 自动模式在实际输出前再识别一次，防止拖入后文件被替换。
             var resolvedMode = mode == CropMode.Auto ? DetectCropMode(image) : mode;
             return resolvedMode switch
             {
@@ -946,6 +953,7 @@ namespace PigResizeF
 
         private static int CropRandomCorners(Image<Rgba32> image, string originalName, string outputDirectory, JpegEncoder encoder)
         {
+            // 在原图 85% 宽高范围内取最大的 3:4 区域，再分别锚定到四个角。
             var maxWidth = Math.Max(1, (int)Math.Floor(image.Width * 0.85));
             var maxHeight = Math.Max(1, (int)Math.Floor(image.Height * 0.85));
             var cropWidth = Math.Max(1, Math.Min(maxWidth, (int)Math.Floor(maxHeight * 3D / 4D)));
@@ -975,6 +983,7 @@ namespace PigResizeF
                 throw new InvalidOperationException("图片尺寸不足以进行宫格拆分。");
             }
 
+            // 使用整数边界分割，余下的像素会分配到相邻宫格，不会丢失画面。
             var index = 1;
             for (var row = 0; row < gridSize; row++)
             {
@@ -993,6 +1002,7 @@ namespace PigResizeF
 
         private static CropMode DetectCropMode(Image<Rgba32> image)
         {
+            // 九宫格需四条理论分界线同时明显，降低普通照片被误判为拼图的概率。
             var grid3Scores = new[]
             {
                 GetPeakSeamScore(image, true, image.Width / 3),
@@ -1005,6 +1015,7 @@ namespace PigResizeF
                 return CropMode.Grid3;
             }
 
+            // 若九宫格不成立，再检测中间横线和竖线组成的四宫格。
             var grid2Scores = new[]
             {
                 GetPeakSeamScore(image, true, image.Width / 2),
@@ -1025,7 +1036,7 @@ namespace PigResizeF
             var sampleStep = Math.Max(1, (vertical ? image.Height : image.Width) / 600);
             var maxScore = 0D;
 
-            // A small search window tolerates thin separators that do not sit exactly on the fractional boundary.
+            // 在理论分界线附近搜索，可兼容带细分隔线或轻微偏移的拼图。
             for (var position = Math.Max(1, center - searchRadius); position < Math.Min(dimension, center + searchRadius + 1); position++)
             {
                 var totalDifference = 0D;
@@ -1082,6 +1093,7 @@ namespace PigResizeF
 
         private void AddJdFiles(IEnumerable<string> files)
         {
+            // 每次拖入的批次单独按文件名排序，再追加到用户已调整的队列末尾。
             var selectedIndices = GetSelectedJdIndices();
             var newFiles = files
                 .Where(IsImageFile)
@@ -1205,6 +1217,7 @@ namespace PigResizeF
                 return;
             }
 
+            // 固化当前列表顺序，后台输出时不受用户继续操作影响。
             var files = jdFilePaths.ToArray();
             var outputDirectory = Path.GetDirectoryName(files[0]) ?? Environment.CurrentDirectory;
             if (Directory.EnumerateFiles(outputDirectory, "京东详情-*.jpg").Any() &&
@@ -1244,6 +1257,7 @@ namespace PigResizeF
 
         private int ExportJdDetails(IEnumerable<string> files, string outputDirectory)
         {
+            // 以 790 像素宽度拼接，并按 1500 像素高度逐张写出，避免创建超长整图。
             const int outputWidth = 790;
             const int segmentHeight = 1500;
             var encoder = new JpegEncoder { Quality = 100 };
@@ -1309,7 +1323,7 @@ namespace PigResizeF
             cropped.Save(outputPath, encoder);
         }
 
-        // ���������ť
+        // 常规转换入口：并行处理当前列表中的全部图片。
         private async void buttonProcess_Click(object sender, EventArgs e)
         {
             if (!droppedFilePaths.Any())
@@ -1318,27 +1332,27 @@ namespace PigResizeF
                 return;
             }
 
-            SetTargetSize(); // ����Ŀ��ߴ�
+            SetTargetSize(); // 根据单选项刷新目标尺寸与输出后缀
 
-            // ���ð�ť����ֹ�ظ����
+            // 处理期间禁用按钮，防止重复提交相同任务。
             buttonProcess.Enabled = false;
             LogMessage("开始处理图片...", LogLevel.Info);
 
 
-            // ���д���ͼƬ
+            // 每个文件独立处理，单个失败不会阻断其他文件。
             var tasks = droppedFilePaths.Select(filePath => ProcessImageAsync(filePath));
             await Task.WhenAll(tasks);
 
             LogMessage("所有图片处理完成！", LogLevel.Success);
             
             droppedFilePaths.Clear();
-            listBoxFiles.Items.Clear(); // ��� ListBox���Ա��������
+            listBoxFiles.Items.Clear();
             LogMessage("图片列表已清空。", LogLevel.Info);
-            // ���ð�ť
+            // 批量任务结束后恢复交互。
             buttonProcess.Enabled = true;
         }
 
-        // ���� RadioButton ѡ�����Ŀ��ߴ�
+        // 将常规转换页的单选项映射为目标尺寸和输出文件后缀。
         private void SetTargetSize()
         {
             if (r1440f.Checked)
@@ -1362,13 +1376,13 @@ namespace PigResizeF
             else if (rspct.Checked)
             {
                 targetSize = new Size(1440, 2160);
-                sname = "��ͼ";
+                sname = "商品长图";
                 LogMessage("目标尺寸已设置为 1440x2160。", LogLevel.Info);
             }
         }
 
 
-        // ͼƬ�������߼�
+        // 单张常规转换逻辑：等比缩放、白底补齐并输出 JPG。
         private async Task ProcessImageAsync(string inputFilePath)
         {
             try
@@ -1381,11 +1395,11 @@ namespace PigResizeF
 
                     LogMessage($"[*] 正在处理: {Path.GetFileName(inputFilePath)}", LogLevel.Processing);
 
-                    // 1. �����ߴ粢����ɫ����
+                    // 先生成目标画布尺寸的图片。
                     var resizedImage = ResizeImageWithPadding(image, targetSize);
 
-                    // 2. ����Ϊ JPG
-                    await resizedImage.SaveAsync(outputFilePath, new JpegEncoder { Quality = 90 }); // Quality: 0-100��90�ǽϺõ�ƽ��
+                    // 常规转换沿用质量 90，以平衡文件体积与清晰度。
+                    await resizedImage.SaveAsync(outputFilePath, new JpegEncoder { Quality = 90 });
 
                     LogMessage($"    -> 已保存到: {outputFileName} (尺寸: {resizedImage.Width}x{resizedImage.Height})", LogLevel.Success);
                 }
@@ -1396,80 +1410,75 @@ namespace PigResizeF
             }
         }
 
-        // ����ͼƬ�ߴ粢���Ӱ�ɫ������ƥ��Ŀ��ߴ�
+        // 等比缩放原图，并将不足部分用白色背景补齐到指定尺寸。
         private Image<Rgba32> ResizeImageWithPadding(Image<Rgba32> sourceImage, Size targetDimensions)
         {
-            sourceImage = OrientImage(sourceImage); // �Ⱦ�������
-            // �������ű���������ԭʼ����
+            sourceImage = OrientImage(sourceImage); // 先按 EXIF 朝向旋转
+            // 取较小比例，确保原图完整落在目标画布内。
             float widthRatio = (float)targetDimensions.Width / sourceImage.Width;
             float heightRatio = (float)targetDimensions.Height / sourceImage.Height;
             float ratio = Math.Min(widthRatio, heightRatio);
 
-            // �������ź�ĳߴ�
+            // 计算等比缩放后的尺寸。
             int newWidth = (int)(sourceImage.Width * ratio);
             int newHeight = (int)(sourceImage.Height * ratio);
 
-            // ����ͼƬ�ߴ�
+            // 先缩放原图。
             sourceImage.Mutate(x => x.Resize(newWidth, newHeight));
 
-            // ����һ����䱳������ͼƬ
+            // 使用白色作为补边背景。
             var paddedImage = new Image<Rgba32>(targetDimensions.Width, targetDimensions.Height, Color.White);
 
-            // ���㽫���ź��ͼƬ��������䱳���ϵ�λ�ã�ʹ�����
+            // 居中放置缩放后的图片。
             int xOffset = (targetDimensions.Width - newWidth) / 2;
             int yOffset = (targetDimensions.Height - newHeight) / 2;
 
-            // �����ź��ͼƬ���Ƶ���䱳����
+            // 绘制到目标画布后返回新的图片对象。
             paddedImage.Mutate(x => x.DrawImage(sourceImage, new SixLabors.ImageSharp.Point(xOffset, yOffset), 1.0f));
 
             return paddedImage;
         }
         
-// ����һ����������������ͼƬ��ת
+        // 根据 EXIF Orientation 修正手机拍摄图片的显示方向。
         private static Image<Rgba32> OrientImage(Image<Rgba32> image)
         {
-            // Check if EXIF information contains the Orientation tag  
+            // 检查 EXIF 中记录的原始拍摄方向。
             if (image.Metadata.ExifProfile != null &&
                 image.Metadata.ExifProfile.TryGetValue(ExifTag.Orientation, out IExifValue<ushort>? orientationValue) &&
                 orientationValue?.Value is ushort orientation)
             {
                 switch (orientation)
                 {
-                    case 2: // Horizontal flip  
+                    case 2: // 水平翻转
                         image.Mutate(x => x.Flip(FlipMode.Horizontal));
                         break;
-                    case 3: // Rotate 180 degrees  
+                    case 3: // 旋转 180 度
                         image.Mutate(x => x.Rotate(RotateMode.Rotate180));
                         break;
-                    case 4: // Vertical flip  
+                    case 4: // 垂直翻转
                         image.Mutate(x => x.Flip(FlipMode.Vertical));
                         break;
-                    case 5: // Transpose (vertical flip followed by 90-degree clockwise rotation)  
+                    case 5: // 垂直翻转后顺时针旋转 90 度
                         image.Mutate(x => x.Flip(FlipMode.Vertical).Rotate(RotateMode.Rotate90));
                         break;
-                    case 6: // Rotate 90 degrees clockwise  
+                    case 6: // 顺时针旋转 90 度
                         image.Mutate(x => x.Rotate(RotateMode.Rotate90));
                         break;
-                    case 7: // Transverse (horizontal flip followed by 90-degree clockwise rotation)  
+                    case 7: // 水平翻转后顺时针旋转 90 度
                         image.Mutate(x => x.Flip(FlipMode.Horizontal).Rotate(RotateMode.Rotate90));
                         break;
-                    case 8: // Rotate 270 degrees clockwise (or 90 degrees counter-clockwise)  
+                    case 8: // 顺时针旋转 270 度
                         image.Mutate(x => x.Rotate(RotateMode.Rotate270));
                         break;
                     default:
-                        // Orientation is 1 (Normal) or unknown, no rotation needed  
+                        // 方向正常或未知时保持原像素不变。
                         break;
                 }
-                
-        // EXIF Orientation ��ǩ�ھ��������Ͳ�����Ҫ�ˣ������Ƴ���������Ϊ 1
-        // image.Metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)1);
-        // ����ֱ���Ƴ�
-        // image.Metadata.ExifProfile.RemoveTag(ExifTag.Orientation);
             }
             return image;
         }
 
-        // ��־�������
+        // 日志级别决定前缀和颜色，三个页签共用这一套记录。
         private enum LogLevel
         {
             Info,
@@ -1519,7 +1528,7 @@ namespace PigResizeF
         private static void AppendLog(RichTextBox logTextBox, string message, LogLevel level)
         {
             string prefix = "";
-            System.Drawing.Color color = System.Drawing.Color.Black; // Ĭ����ɫ
+            System.Drawing.Color color = System.Drawing.Color.Black;
 
             switch (level)
             {
@@ -1545,24 +1554,24 @@ namespace PigResizeF
                     break;
             }
 
-            // ��ʽ�����
+            // 统一生成带时间、级别前缀的日志文本。
             string formattedMessage = $"{DateTime.Now:HH:mm:ss} {prefix}{message}\r\n";
 
-            // ��¼��ɫ
+            // 只给刚追加的文本设置颜色。
             int startIndex = logTextBox.Text.Length;
             logTextBox.AppendText(formattedMessage);
             int endIndex = logTextBox.Text.Length;
 
             logTextBox.Select(startIndex, endIndex - startIndex);
             logTextBox.SelectionColor = color;
-            logTextBox.SelectionCharOffset = 0; // �ָ�Ĭ��ƫ��
-            logTextBox.DeselectAll(); // ȡ��ѡ��
+            logTextBox.SelectionCharOffset = 0;
+            logTextBox.DeselectAll();
 
-            // �Զ��������ײ�
+            // 始终滚动到最新记录。
             logTextBox.ScrollToCaret();
         }
 
-        // �ڴ������ʱ�� RadioButton ״̬�ı�ʱ����Ŀ��ߴ磨��ѡ��
+        // 常规转换页的模式切换立即更新目标尺寸。
         private void radioButton_CheckedChanged(object sender, EventArgs e)
         {
             if (((RadioButton)sender).Checked)
@@ -1575,7 +1584,7 @@ namespace PigResizeF
         {
             
             droppedFilePaths.Clear();
-            listBoxFiles.Items.Clear(); // ��� ListBox���Ա��������
+            listBoxFiles.Items.Clear();
             LogMessage("图片列表已清空。", LogLevel.Info);
         }
     }
