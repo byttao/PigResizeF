@@ -1,0 +1,36 @@
+name: Quick Build
+
+# 快速编译工作流 - 每次推送都编译
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  quick-build:
+    name: 快速编译检查
+    runs-on: windows-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: 恢复 NuGet 包
+      run: dotnet restore PigResizeF/PigResizeF.csproj
+
+    - name: 编译
+      run: dotnet build PigResizeF/PigResizeF.csproj --configuration Release --no-restore
+
+    - name: 显示编译结果
+      if: success()
+      run: echo "✅ 编译成功！"
+
+    - name: 编译失败通知
+      if: failure()
+      run: echo "❌ 编译失败，请检查代码"
