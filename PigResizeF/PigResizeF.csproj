@@ -7,10 +7,18 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>icons8-picture-100.ico</ApplicationIcon>
-    <Version>1.5.0</Version>
-    <AssemblyVersion>1.5.0.0</AssemblyVersion>
-    <FileVersion>1.5.0.0</FileVersion>
-    <InformationalVersion>1.5.0</InformationalVersion>
+    <Version>1.6.0</Version>
+    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <FileVersion>1.6.0.0</FileVersion>
+    <InformationalVersion>1.6.0</InformationalVersion>
+    <Authors>byttao</Authors>
+    <Company>PigResizeF</Company>
+    <Product>PigResizeF - 图片批量裁切工具</Product>
+    <Description>图片批量转换、裁切、压缩工具，支持智能裁切白边</Description>
+    <Copyright>Copyright © 2024</Copyright>
+    <RepositoryUrl>https://github.com/byttao/PigResizeF</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>

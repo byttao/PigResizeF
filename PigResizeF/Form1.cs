@@ -17,11 +17,17 @@ using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using Color = SixLabors.ImageSharp.Color;
 using Size = System.Drawing.Size; // 避免与 ImageSharp.Size 重名
+using PigResizeF.Core.Services;
+using PigResizeF.Core.Models;
+using PigResizeF.Core.Common;
 
 namespace PigResizeF
 {
     public partial class Form1 : Form
     {
+        // 服务层实例
+        private readonly IImageProcessor _imageProcessor;
+        private readonly IUpdateChecker _updateChecker;
 
         // 三个页签各自维护输入文件，避免切换功能时互相影响。
         private List<string> droppedFilePaths = new List<string>();
@@ -52,10 +58,15 @@ namespace PigResizeF
         private Button cropStartButton = null!;
         private bool cropIsProcessing;
         private bool cropGridRefreshing;
-        private static readonly HttpClient UpdateHttpClient = CreateUpdateHttpClient();
+
         public Form1()
         {
             InitializeComponent();
+
+            // 初始化服务层
+            _imageProcessor = new ImageProcessor();
+            _updateChecker = new UpdateChecker();
+
             richTextBoxLog.Rtf = ""; // 用 RTF 空内容初始化，保留后续彩色日志能力
             // 常规转换日志只读，三个页签通过 LogMessage 同步显示。
             richTextBoxLog.ReadOnly = true;
@@ -71,13 +82,6 @@ namespace PigResizeF
 
         }
 
-        private static HttpClient CreateUpdateHttpClient()
-        {
-            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("PigResizeF/1.5");
-            return client;
-        }
-
         private async void Form1_Shown(object? sender, EventArgs e)
         {
             await CheckForUpdateAsync();
@@ -87,33 +91,15 @@ namespace PigResizeF
         {
             try
             {
-                using var response = await UpdateHttpClient.GetAsync("https://api.github.com/repos/byttao/PigResizeF/releases/latest");
-                if (!response.IsSuccessStatusCode)
-                {
-                    return;
-                }
+                var updateInfo = await _updateChecker.CheckForUpdateAsync();
 
-                using var release = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
-                var root = release.RootElement;
-                var tagName = root.GetProperty("tag_name").GetString();
-                var releaseUrl = root.GetProperty("html_url").GetString();
-                if (string.IsNullOrWhiteSpace(tagName) || string.IsNullOrWhiteSpace(releaseUrl) ||
-                    !Version.TryParse(tagName.TrimStart('v', 'V'), out var latestVersion))
+                if (updateInfo.HasUpdate && !IsDisposed && !Disposing)
                 {
-                    return;
-                }
-
-                var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0);
-                if (latestVersion <= currentVersion || IsDisposed || Disposing)
-                {
-                    return;
-                }
-
-                var message = $"发现新版本 {tagName}。\r\n当前版本：v{currentVersion.Major}.{currentVersion.Minor}.{Math.Max(0, currentVersion.Build)}\r\n\r\n是否打开 GitHub Release 页面？";
-                if (MessageBox.Show(message, "发现新版本", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes &&
-                    Uri.TryCreate(releaseUrl, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps)
-                {
-                    Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+                    var message = $"发现新版本 {updateInfo.LatestVersion}。\r\n当前版本：{updateInfo.CurrentVersion}\r\n\r\n是否打开 GitHub Release 页面？";
+                    if (MessageBox.Show(message, "发现新版本", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                    {
+                        Process.Start(new ProcessStartInfo(updateInfo.ReleaseUrl) { UseShellExecute = true });
+                    }
                 }
             }
             catch (HttpRequestException)
@@ -124,7 +110,7 @@ namespace PigResizeF
             {
                 // 超时或窗口关闭时静默结束检查。
             }
-            catch (JsonException)
+            catch (Exception)
             {
                 // 忽略异常的 Release 数据，避免启动时出现无意义提示。
             }
