@@ -1,16 +1,13 @@
-namespace PigResizeF
+using Avalonia;
+
+namespace PigResizeF;
+
+internal static class Program
 {
-    internal static class Program
-    {
-        /// <summary>
-        /// 程序入口：初始化 WinForms 运行环境后显示主窗体。
-        /// </summary>
-        [STAThread]
-        static void Main()
-        {
-            // .NET 8 默认初始化高 DPI 与应用级视觉配置。
-            ApplicationConfiguration.Initialize();
-            Application.Run(new Form1());
-        }
-    }
+    [STAThread]
+    public static void Main(string[] args) => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>()
+        .UsePlatformDetect()
+        .LogToTrace();
 }

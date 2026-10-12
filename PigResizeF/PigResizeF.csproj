@@ -2,22 +2,21 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>icons8-picture-100.ico</ApplicationIcon>
     <Version>1.5.0</Version>
     <AssemblyVersion>1.5.0.0</AssemblyVersion>
     <FileVersion>1.5.0.0</FileVersion>
-    <InformationalVersion>1.5.0</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="icons8-picture-100.ico" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <Compile Remove="Form1.cs;Form1.Designer.cs;JdPreviewCanvas.cs" />
+    <EmbeddedResource Remove="Form1.resx" />
+    <PackageReference Include="Avalonia" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.3" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
 

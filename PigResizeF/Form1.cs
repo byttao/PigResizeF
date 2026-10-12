@@ -264,7 +264,7 @@ namespace PigResizeF
             imageGroup.Controls.Add(cropGridView);
 
             var modeGroup = new GroupBox { Text = "裁切模式", Dock = DockStyle.Fill };
-            var modeLayout = new TableLayoutPanel { ColumnCount = 1, RowCount = 5, Dock = DockStyle.Fill };
+            var modeLayout = new TableLayoutPanel { ColumnCount = 1, RowCount = 5, Dock = DockStyle.Fill, BackColor = System.Drawing.Color.Transparent };
             for (var row = 0; row < 5; row++)
             {
                 modeLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 20F));
@@ -286,7 +286,7 @@ namespace PigResizeF
             modeGroup.Controls.Add(modeLayout);
 
             var outputGroup = new GroupBox { Text = "保存设置", Dock = DockStyle.Fill };
-            var outputLayout = new TableLayoutPanel { ColumnCount = 3, RowCount = 2, Dock = DockStyle.Fill };
+            var outputLayout = new TableLayoutPanel { ColumnCount = 3, RowCount = 2, Dock = DockStyle.Fill, BackColor = System.Drawing.Color.Transparent };
             outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
             outputLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118F));
@@ -306,7 +306,7 @@ namespace PigResizeF
             outputLayout.Controls.Add(cropBrowseOutputButton, 2, 1);
             outputGroup.Controls.Add(outputLayout);
 
-            var actionPanel = new Panel { Dock = DockStyle.Fill };
+            var actionPanel = new Panel { Dock = DockStyle.Fill, BackColor = System.Drawing.Color.Transparent };
             actionPanel.Controls.Add(cropStartButton);
             cropStartButton.Location = new System.Drawing.Point(18, 40);
 
@@ -416,7 +416,8 @@ namespace PigResizeF
         {
             // 统一三页的字体、色彩和控件边框，布局控件仍由各页自行创建。
             var canvas = System.Drawing.Color.FromArgb(245, 247, 250);
-            var surface = System.Drawing.Color.White;
+            // 内容区使用与窗体一致的底色，仅通过细边框区分不同控件。
+            var surface = canvas;
             var text = System.Drawing.Color.FromArgb(30, 41, 59);
 
             ClientSize = new Size(940, 760);
@@ -451,7 +452,7 @@ namespace PigResizeF
 
             foreach (var radioButton in new[] { r1440f, r1440c, r800f, rspct })
             {
-                radioButton.BackColor = surface;
+                radioButton.BackColor = System.Drawing.Color.Transparent;
                 radioButton.ForeColor = text;
                 radioButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
             }
@@ -484,13 +485,13 @@ namespace PigResizeF
             StyleLogTextBox(cropLogTextBox, surface, text);
             foreach (var radioButton in new[] { cropAutoRadioButton, cropRandomRadioButton, cropGrid2RadioButton, cropGrid3RadioButton })
             {
-                radioButton.BackColor = surface;
+                radioButton.BackColor = System.Drawing.Color.Transparent;
                 radioButton.ForeColor = text;
                 radioButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
             }
-            cropQuickModeCheckBox.BackColor = surface;
+            cropQuickModeCheckBox.BackColor = System.Drawing.Color.Transparent;
             cropQuickModeCheckBox.ForeColor = text;
-            cropOutputDirectoryTextBox.BackColor = System.Drawing.Color.FromArgb(248, 250, 252);
+            cropOutputDirectoryTextBox.BackColor = canvas;
             cropOutputDirectoryTextBox.ForeColor = text;
             StyleButton(cropBrowseOutputButton, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
             StyleButton(cropStartButton, System.Drawing.Color.FromArgb(37, 99, 235), System.Drawing.Color.White);
@@ -514,7 +515,8 @@ namespace PigResizeF
             }
 
             StyleListBox(jdListBox, surface, text);
-            jdPreviewCanvas.BackColor = System.Drawing.Color.FromArgb(252, 253, 255);
+            // ScrollableControl does not support transparent backgrounds; use the shared canvas color instead.
+            jdPreviewCanvas.BackColor = canvas;
             StyleLogTextBox(jdLogTextBox, surface, text);
             StyleButton(buttonJdMoveUp, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
             StyleButton(buttonJdMoveDown, System.Drawing.Color.FromArgb(224, 242, 254), System.Drawing.Color.FromArgb(3, 105, 161));
@@ -524,7 +526,7 @@ namespace PigResizeF
 
         private static void StyleGroupBox(GroupBox groupBox, System.Drawing.Color surface, System.Drawing.Color text)
         {
-            groupBox.BackColor = surface;
+            groupBox.BackColor = System.Drawing.Color.Transparent;
             groupBox.ForeColor = text;
             groupBox.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
             groupBox.Padding = new Padding(10, 26, 10, 10);
@@ -546,7 +548,7 @@ namespace PigResizeF
             gridView.BorderStyle = BorderStyle.FixedSingle;
             gridView.EnableHeadersVisualStyles = false;
             gridView.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
-            gridView.ColumnHeadersDefaultCellStyle.BackColor = System.Drawing.Color.FromArgb(241, 245, 249);
+            gridView.ColumnHeadersDefaultCellStyle.BackColor = surface;
             gridView.ColumnHeadersDefaultCellStyle.ForeColor = text;
             gridView.ColumnHeadersDefaultCellStyle.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
             gridView.DefaultCellStyle.BackColor = surface;
@@ -581,16 +583,9 @@ namespace PigResizeF
         {
             button.BackColor = backColor;
             button.ForeColor = foreColor;
-            button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderSize = 0;
-            button.FlatAppearance.MouseOverBackColor = System.Drawing.Color.FromArgb(
-                Math.Max(0, backColor.R - 12),
-                Math.Max(0, backColor.G - 12),
-                Math.Max(0, backColor.B - 12));
-            button.FlatAppearance.MouseDownBackColor = System.Drawing.Color.FromArgb(
-                Math.Max(0, backColor.R - 24),
-                Math.Max(0, backColor.G - 24),
-                Math.Max(0, backColor.B - 24));
+            // 标准样式使用系统的凸起边框，点击时会自动呈现按下状态。
+            button.FlatStyle = FlatStyle.Standard;
+            button.UseVisualStyleBackColor = false;
             button.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F, System.Drawing.FontStyle.Bold);
             button.Size = new Size(116, 38);
             button.Cursor = Cursors.Hand;
@@ -662,7 +657,7 @@ namespace PigResizeF
             RefreshCropFileList();
             if (newFiles.Length > 0)
             {
-                LogMessage($"图片裁切：已添加 {newFiles.Length} 张图片。", LogLevel.Info);
+                LogMessage($"图片裁切：已添加 {newFiles.Length} 张图片。", LogLevel.Info, LogTarget.Crop);
             }
             return newFiles;
         }
@@ -703,6 +698,7 @@ namespace PigResizeF
 
             var selectedMode = ParseCropMode(cropGridView.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString());
             cropFileModes[filePath] = selectedMode;
+            LogMessage($"图片裁切：{Path.GetFileName(filePath)} 模式已设置为 {GetCropModeDisplay(selectedMode)}。", LogLevel.Info, LogTarget.Crop);
             if (selectedMode == CropMode.Auto)
             {
                 _ = DetectCropModesAsync(new[] { filePath });
@@ -714,6 +710,7 @@ namespace PigResizeF
             if (sender is RadioButton { Checked: true } && !cropIsProcessing)
             {
                 await ApplySelectedCropModeToAllAsync();
+                LogMessage($"图片裁切：批量模式已切换为 {GetCropModeDisplay(GetCropMode())}。", LogLevel.Info, LogTarget.Crop);
             }
         }
 
@@ -755,6 +752,11 @@ namespace PigResizeF
                 }
             }
             RefreshCropFileList();
+            var recognizedCount = detectionResults.Count(result => result.Mode.HasValue);
+            if (recognizedCount > 0)
+            {
+                LogMessage($"图片裁切：已完成 {recognizedCount} 张图片的自动识别。", LogLevel.Info, LogTarget.Crop);
+            }
         }
 
         private static CropMode? TryDetectCropMode(string filePath)
@@ -852,7 +854,7 @@ namespace PigResizeF
                 .ToArray();
             cropIsProcessing = true;
             SetCropControlsEnabled(false);
-            LogMessage($"图片裁切：开始处理 {jobs.Length} 张图片。", LogLevel.Processing);
+            LogMessage($"图片裁切：开始处理 {jobs.Length} 张图片。", LogLevel.Processing, LogTarget.Crop);
             try
             {
                 var result = await Task.Run(() => CropImages(jobs, customOutputDirectory));
@@ -866,18 +868,18 @@ namespace PigResizeF
 
                 if (result.FailedFiles.Count == 0)
                 {
-                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片。", LogLevel.Success);
+                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片。", LogLevel.Success, LogTarget.Crop);
                     MessageBox.Show($"已输出 {result.OutputCount} 张图片。", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
-                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片，{result.FailedFiles.Count} 张未完成。", LogLevel.Warning);
+                    LogMessage($"图片裁切：已输出 {result.OutputCount} 张图片，{result.FailedFiles.Count} 张未完成。", LogLevel.Warning, LogTarget.Crop);
                     MessageBox.Show($"已输出 {result.OutputCount} 张图片。\r\n以下文件未完成，已保留在列表：\r\n{string.Join("\r\n", result.FailedFiles.Select(Path.GetFileName))}", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"图片裁切失败：{ex.Message}", LogLevel.Error);
+                LogMessage($"图片裁切失败：{ex.Message}", LogLevel.Error, LogTarget.Crop);
                 MessageBox.Show($"裁切失败：{ex.Message}", "图片裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -1105,7 +1107,7 @@ namespace PigResizeF
             RefreshJdFileList(selectedIndices);
             if (newFiles.Length > 0)
             {
-                LogMessage($"京东详情页：已添加 {newFiles.Length} 张图片。", LogLevel.Info);
+                LogMessage($"京东详情页：已添加 {newFiles.Length} 张图片。", LogLevel.Info, LogTarget.JdDetails);
             }
         }
 
@@ -1197,14 +1199,15 @@ namespace PigResizeF
                 return;
             }
 
+            LogMessage("京东详情页：开始生成拼接预览。", LogLevel.Processing, LogTarget.JdDetails);
             try
             {
                 jdPreviewCanvas.SetImages(jdFilePaths);
-                LogMessage($"京东详情页：已加载 {jdFilePaths.Count} 张图片预览。", LogLevel.Info);
+                LogMessage($"京东详情页：已加载 {jdFilePaths.Count} 张图片预览。", LogLevel.Info, LogTarget.JdDetails);
             }
             catch (Exception ex)
             {
-                LogMessage($"京东详情页预览失败：{ex.Message}", LogLevel.Error);
+                LogMessage($"京东详情页预览失败：{ex.Message}", LogLevel.Error, LogTarget.JdDetails);
                 MessageBox.Show($"无法生成预览：{ex.Message}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -1228,17 +1231,17 @@ namespace PigResizeF
 
             buttonJdPreview.Enabled = false;
             buttonJdExport.Enabled = false;
-            LogMessage($"京东详情页：开始输出 {files.Length} 张图片。", LogLevel.Processing);
+            LogMessage($"京东详情页：开始输出 {files.Length} 张图片。", LogLevel.Processing, LogTarget.JdDetails);
             try
             {
                 var outputCount = await Task.Run(() => ExportJdDetails(files, outputDirectory));
-                LogMessage($"京东详情页：已输出 {outputCount} 张图片。", LogLevel.Success);
+                LogMessage($"京东详情页：已输出 {outputCount} 张图片。", LogLevel.Success, LogTarget.JdDetails);
                 MessageBox.Show($"已输出 {outputCount} 张图片。\r\n保存位置：{outputDirectory}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 ClearJdFiles();
             }
             catch (Exception ex)
             {
-                LogMessage($"京东详情页输出失败：{ex.Message}", LogLevel.Error);
+                LogMessage($"京东详情页输出失败：{ex.Message}", LogLevel.Error, LogTarget.JdDetails);
                 MessageBox.Show($"输出失败：{ex.Message}", "京东详情页裁切", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
@@ -1478,7 +1481,7 @@ namespace PigResizeF
             return image;
         }
 
-        // 日志级别决定前缀和颜色，三个页签共用这一套记录。
+        // 日志级别决定前缀和颜色。
         private enum LogLevel
         {
             Info,
@@ -1488,7 +1491,15 @@ namespace PigResizeF
             Processing
         }
 
-        private void LogMessage(string message, LogLevel level)
+        // 日志目标对应三个页签，内容不会在不同功能页之间串行显示。
+        private enum LogTarget
+        {
+            Conversion,
+            Crop,
+            JdDetails
+        }
+
+        private void LogMessage(string message, LogLevel level, LogTarget target = LogTarget.Conversion)
         {
             if (IsDisposed || Disposing)
             {
@@ -1496,33 +1507,27 @@ namespace PigResizeF
             }
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => AppendLog(message, level)));
+                BeginInvoke(new Action(() => AppendLog(message, level, target)));
             }
             else
             {
-                AppendLog(message, level);
+                AppendLog(message, level, target);
             }
         }
 
-        private void AppendLog(string message, LogLevel level)
+        private void AppendLog(string message, LogLevel level, LogTarget target)
         {
-            foreach (var logTextBox in GetLogTextBoxes())
-            {
-                AppendLog(logTextBox, message, level);
-            }
+            AppendLog(GetLogTextBox(target), message, level);
         }
 
-        private IEnumerable<RichTextBox> GetLogTextBoxes()
+        private RichTextBox GetLogTextBox(LogTarget target)
         {
-            yield return richTextBoxLog;
-            if (cropLogTextBox != null)
+            return target switch
             {
-                yield return cropLogTextBox;
-            }
-            if (jdLogTextBox != null)
-            {
-                yield return jdLogTextBox;
-            }
+                LogTarget.Crop => cropLogTextBox,
+                LogTarget.JdDetails => jdLogTextBox,
+                _ => richTextBoxLog
+            };
         }
 
         private static void AppendLog(RichTextBox logTextBox, string message, LogLevel level)
