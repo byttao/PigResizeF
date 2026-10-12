@@ -15,11 +15,11 @@ partial class MainForm
     private System.Windows.Forms.TabPage tabJdDetail;
 
     // 顶部工具栏
-    private Panel topPanel;
+    private System.Windows.Forms.Panel topPanel;
     private MaterialButton btnThemeToggle;
     private MaterialButton btnSettings;
     private MaterialButton btnAbout;
-    private Label lblVersion;
+    private System.Windows.Forms.Label lblVersion;
 
     /// <summary>
     /// 必需的设计器变量
@@ -48,17 +48,17 @@ partial class MainForm
         this.components = new System.ComponentModel.Container();
 
         // 顶部面板
-        this.topPanel = new Panel();
+        this.topPanel = new System.Windows.Forms.Panel();
         this.btnThemeToggle = new MaterialButton();
         this.btnSettings = new MaterialButton();
         this.btnAbout = new MaterialButton();
-        this.lblVersion = new Label();
+        this.lblVersion = new System.Windows.Forms.Label();
 
         // Tab 控件
         this.tabControl = new MaterialTabControl();
-        this.tabConvert = new TabPage();
-        this.tabCrop = new TabPage();
-        this.tabJdDetail = new TabPage();
+        this.tabConvert = new System.Windows.Forms.TabPage();
+        this.tabCrop = new System.Windows.Forms.TabPage();
+        this.tabJdDetail = new System.Windows.Forms.TabPage();
 
         this.SuspendLayout();
 
