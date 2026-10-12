@@ -89,9 +89,7 @@ partial class MainForm
         this.btnThemeToggle.Dock = DockStyle.Right;
         this.btnThemeToggle.AutoSize = false;
         this.btnThemeToggle.Size = new Size(48, 48);
-        this.btnThemeToggle.Type = MaterialButtonType.Text;
-        this.btnThemeToggle.Icon = Properties.Resources.IconTheme; // 需要添加图标资源
-        this.btnThemeToggle.ToolTipText = "切换主题";
+        this.btnThemeToggle.Text = "🌙";
         this.btnThemeToggle.Click += (s, e) => ToggleTheme();
 
         //
@@ -100,9 +98,7 @@ partial class MainForm
         this.btnSettings.Dock = DockStyle.Right;
         this.btnSettings.AutoSize = false;
         this.btnSettings.Size = new Size(48, 48);
-        this.btnSettings.Type = MaterialButtonType.Text;
         this.btnSettings.Text = "⚙";
-        this.btnSettings.ToolTipText = "设置";
 
         //
         // btnAbout
@@ -110,9 +106,7 @@ partial class MainForm
         this.btnAbout.Dock = DockStyle.Right;
         this.btnAbout.AutoSize = false;
         this.btnAbout.Size = new Size(48, 48);
-        this.btnAbout.Type = MaterialButtonType.Text;
         this.btnAbout.Text = "ℹ";
-        this.btnAbout.ToolTipText = "关于";
 
         //
         // tabControl

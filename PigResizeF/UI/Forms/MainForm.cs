@@ -33,15 +33,6 @@ public partial class MainForm : MaterialForm
         _materialSkinManager.AddFormToManage(this);
         _materialSkinManager.Theme = MaterialSkinManager.Themes.LIGHT;
 
-        // 设置主题色板 - 天蓝色系
-        _materialSkinManager.ColorScheme = new ColorScheme(
-            Primary.Blue500,      // 主色 #2196F3
-            Primary.Blue700,      // 深主色 #1976D2
-            Primary.Blue200,      // 浅主色 #90CAF9
-            Accent.Cyan200,       // 强调色 #80DEEA
-            TextShade.WHITE       // 文字色调
-        );
-
         InitializeComponent();
         InitializeCustomComponents();
 

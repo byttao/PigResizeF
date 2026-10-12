@@ -5,6 +5,7 @@ using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
+using TaskStatus = PigResizeF.Core.Models.TaskStatus;
 
 namespace PigResizeF.Core.Services;
 
