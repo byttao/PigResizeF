@@ -1,0 +1,217 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, feature/modern-ui-redesign, feature/ui-improvements-v2 ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  PROJECT_PATH: PigResizeF/PigResizeF.csproj
+  OUTPUT_DIR: publish
+  DOTNET_VERSION: '8.0.x'
+
+jobs:
+  build:
+    name: Build on Windows
+    runs-on: windows-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 设置 .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: 恢复依赖
+      run: dotnet restore ${{ env.PROJECT_PATH }}
+
+    - name: 编译项目
+      run: dotnet build ${{ env.PROJECT_PATH }} --configuration Release --no-restore
+
+    - name: 运行测试 (如果有)
+      run: dotnet test --configuration Release --no-build --verbosity normal
+      continue-on-error: true
+
+    - name: 发布 Win-x64 自包含版 (exe + DLL)
+      run: |
+        dotnet publish ${{ env.PROJECT_PATH }} `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output ${{ env.OUTPUT_DIR }}/win-x64-standard `
+          -p:PublishSingleFile=false `
+          -p:PublishTrimmed=false
+
+    - name: 发布 Win-x64 单文件版 (仅 exe)
+      run: |
+        dotnet publish ${{ env.PROJECT_PATH }} `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output ${{ env.OUTPUT_DIR }}/win-x64-single `
+          -p:PublishSingleFile=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true `
+          -p:PublishTrimmed=false
+
+    - name: 发布 Win-x64 框架依赖版 (exe + DLL)
+      run: |
+        dotnet publish ${{ env.PROJECT_PATH }} `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained false `
+          --output ${{ env.OUTPUT_DIR }}/win-x64-framework `
+          -p:PublishSingleFile=false
+
+    - name: 获取版本号
+      id: get_version
+      shell: pwsh
+      run: |
+        if ("${{ github.ref }}" -match "refs/tags/v(.+)") {
+          $version = $matches[1]
+        } else {
+          $version = "dev-$(git rev-parse --short HEAD)"
+        }
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "版本: $version"
+
+    - name: 创建压缩包 (标准版 - exe + DLL)
+      shell: pwsh
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        Compress-Archive -Path "${{ env.OUTPUT_DIR }}/win-x64-standard/*" `
+          -DestinationPath "PigResizeF-v${version}-win-x64-standard.zip"
+
+    - name: 创建压缩包 (单文件版 - 仅 exe)
+      shell: pwsh
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        Compress-Archive -Path "${{ env.OUTPUT_DIR }}/win-x64-single/*" `
+          -DestinationPath "PigResizeF-v${version}-win-x64-single.zip"
+
+    - name: 创建压缩包 (框架依赖版)
+      shell: pwsh
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}"
+        Compress-Archive -Path "${{ env.OUTPUT_DIR }}/win-x64-framework/*" `
+          -DestinationPath "PigResizeF-v${version}-win-x64-framework.zip"
+
+    - name: 上传构建产物 (标准版)
+      uses: actions/upload-artifact@v4
+      with:
+        name: PigResizeF-win-x64-standard
+        path: PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-standard.zip
+        retention-days: 30
+
+    - name: 上传构建产物 (单文件版)
+      uses: actions/upload-artifact@v4
+      with:
+        name: PigResizeF-win-x64-single
+        path: PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-single.zip
+        retention-days: 30
+
+    - name: 上传构建产物 (框架依赖版)
+      uses: actions/upload-artifact@v4
+      with:
+        name: PigResizeF-win-x64-framework
+        path: PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-framework.zip
+        retention-days: 30
+
+    - name: 生成变更日志
+      id: changelog
+      if: startsWith(github.ref, 'refs/tags/v')
+      shell: pwsh
+      run: |
+        $changelog = git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD
+        $changelog = $changelog -replace '"', '\"'
+        echo "CHANGELOG<<EOF" >> $env:GITHUB_OUTPUT
+        echo "$changelog" >> $env:GITHUB_OUTPUT
+        echo "EOF" >> $env:GITHUB_OUTPUT
+
+    - name: 创建 GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        name: PigResizeF v${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## 🎉 PigResizeF v${{ steps.get_version.outputs.VERSION }}
+
+          ### 📦 下载说明
+
+          **三个版本可选**:
+
+          1. **标准版** (`standard`) - **推荐**:
+             - exe + DLL 文件
+             - 包含 .NET 8 运行时
+             - 无需安装 .NET Framework
+             - 体积适中 (~100MB)
+             - 启动速度快
+
+          2. **单文件版** (`single`):
+             - 仅一个 exe 文件
+             - 包含 .NET 8 运行时
+             - 无需安装 .NET Framework
+             - 体积稍大 (~100MB)
+             - 首次启动稍慢(需解压)
+
+          3. **框架依赖版** (`framework`):
+             - exe + DLL 文件
+             - 需要预先安装 .NET 8 Runtime
+             - 体积最小 (~5MB)
+             - 推荐给已安装 .NET 8 的用户
+
+          ### 🔧 安装 .NET 8 Runtime (如选择框架依赖版本)
+
+          https://dotnet.microsoft.com/download/dotnet/8.0
+
+          ### 📝 更新内容
+
+          ${{ steps.changelog.outputs.CHANGELOG }}
+
+          ### 🌐 代理配置 (如需访问 GitHub)
+
+          更新检查功能已配置代理: `192.168.10.8:1188`
+
+          ---
+
+          **完整变更**: https://github.com/${{ github.repository }}/compare/v${{ steps.get_version.outputs.VERSION }}
+        files: |
+          PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-standard.zip
+          PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-single.zip
+          PigResizeF-v${{ steps.get_version.outputs.VERSION }}-win-x64-framework.zip
+        draft: false
+        prerelease: ${{ contains(steps.get_version.outputs.VERSION, 'beta') || contains(steps.get_version.outputs.VERSION, 'alpha') || contains(steps.get_version.outputs.VERSION, 'rc') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 可选: 代码质量检查
+  code-quality:
+    name: 代码质量检查
+    runs-on: windows-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: 安装 dotnet-format
+      run: dotnet tool install -g dotnet-format
+
+    - name: 代码格式检查
+      run: dotnet format ${{ env.PROJECT_PATH }} --verify-no-changes --verbosity diagnostic
+      continue-on-error: true
+
+    - name: 依赖安全检查
+      run: dotnet list ${{ env.PROJECT_PATH }} package --vulnerable --include-transitive
+      continue-on-error: true
