@@ -5,10 +5,6 @@ using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using ImageSharpImage = SixLabors.ImageSharp.Image;
-using ImageSharpColor = SixLabors.ImageSharp.Color;
-using ImageSharpPoint = SixLabors.ImageSharp.Point;
-using ImageSharpRectangle = SixLabors.ImageSharp.Rectangle;
 
 namespace PigResizeF.Core.Services;
 
@@ -29,7 +25,7 @@ public class ImageProcessor : IImageProcessor
 
             await Task.Run(() =>
             {
-                using var image = ImageSharpImage.Load<Rgba32>(task.SourceFilePath);
+                using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(task.SourceFilePath);
 
                 // 修正 EXIF 方向
                 OrientImage(image);
@@ -104,7 +100,7 @@ public class ImageProcessor : IImageProcessor
 
             await Task.Run(() =>
             {
-                using var image = ImageSharpImage.Load<Rgba32>(task.SourceFilePath);
+                using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(task.SourceFilePath);
                 OrientImage(image);
 
                 // 如果是自动模式，先检测
@@ -173,7 +169,7 @@ public class ImageProcessor : IImageProcessor
     {
         return await Task.Run(() =>
         {
-            using var image = ImageSharpImage.Load<Rgba32>(filePath);
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(filePath);
             OrientImage(image);
             return DetectCropModeSync(image);
         });
@@ -197,7 +193,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 修正图片 EXIF 方向
     /// </summary>
-    private static void OrientImage(ImageSharpImage<Rgba32> image)
+    private static void OrientImage(SixLabors.ImageSharp.Image<Rgba32> image)
     {
         if (image.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out IExifValue<ushort>? orientationValue) == true
             && orientationValue?.Value is ushort orientation)
@@ -221,7 +217,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 等比缩放并白底补齐
     /// </summary>
-    private static ImageSharpImage<Rgba32> ResizeWithPadding(ImageSharpImage<Rgba32> source, int targetWidth, int targetHeight)
+    private static SixLabors.ImageSharp.Image<Rgba32> ResizeWithPadding(SixLabors.ImageSharp.Image<Rgba32> source, int targetWidth, int targetHeight)
     {
         var widthRatio = (float)targetWidth / source.Width;
         var heightRatio = (float)targetHeight / source.Height;
@@ -232,11 +228,11 @@ public class ImageProcessor : IImageProcessor
 
         source.Mutate(x => x.Resize(newWidth, newHeight));
 
-        var result = new ImageSharpImage<Rgba32>(targetWidth, targetHeight, ImageSharpColor.White);
+        var result = new SixLabors.ImageSharp.Image<Rgba32>(targetWidth, targetHeight, SixLabors.ImageSharp.Color.White);
         var x = (targetWidth - newWidth) / 2;
         var y = (targetHeight - newHeight) / 2;
 
-        result.Mutate(ctx => ctx.DrawImage(source, new ImageSharpPoint(x, y), 1.0f));
+        result.Mutate(ctx => ctx.DrawImage(source, new SixLabors.ImageSharp.Point(x, y), 1.0f));
         return result;
     }
 
@@ -253,7 +249,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 同步检测裁切模式
     /// </summary>
-    private static Enums.CropMode DetectCropModeSync(ImageSharpImage<Rgba32> image)
+    private static Enums.CropMode DetectCropModeSync(SixLabors.ImageSharp.Image<Rgba32> image)
     {
         // TODO: 实现分界线检测算法
         // 暂时返回四角乱切
@@ -263,7 +259,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 执行裁切
     /// </summary>
-    private static int CropImage(ImageSharpImage<Rgba32> image, string sourcePath, string outputDir, Enums.CropMode mode)
+    private static int CropImage(SixLabors.ImageSharp.Image<Rgba32> image, string sourcePath, string outputDir, Enums.CropMode mode)
     {
         var originalName = Path.GetFileNameWithoutExtension(sourcePath);
         var encoder = new JpegEncoder { Quality = Constants.HighQualityJpeg };
@@ -280,7 +276,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 四角乱切
     /// </summary>
-    private static int CropRandomCorners(ImageSharpImage<Rgba32> image, string name, string outputDir, JpegEncoder encoder)
+    private static int CropRandomCorners(SixLabors.ImageSharp.Image<Rgba32> image, string name, string outputDir, JpegEncoder encoder)
     {
         var maxWidth = (int)(image.Width * 0.85);
         var maxHeight = (int)(image.Height * 0.85);
@@ -289,16 +285,16 @@ public class ImageProcessor : IImageProcessor
 
         var positions = new[]
         {
-            new ImageSharpPoint(0, 0),
-            new ImageSharpPoint(image.Width - cropWidth, 0),
-            new ImageSharpPoint(0, image.Height - cropHeight),
-            new ImageSharpPoint(image.Width - cropWidth, image.Height - cropHeight)
+            new SixLabors.ImageSharp.Point(0, 0),
+            new SixLabors.ImageSharp.Point(image.Width - cropWidth, 0),
+            new SixLabors.ImageSharp.Point(0, image.Height - cropHeight),
+            new SixLabors.ImageSharp.Point(image.Width - cropWidth, image.Height - cropHeight)
         };
 
         for (var i = 0; i < positions.Length; i++)
         {
             using var cropped = image.Clone(ctx => ctx
-                .Crop(new ImageSharpRectangle(positions[i].X, positions[i].Y, cropWidth, cropHeight))
+                .Crop(new SixLabors.ImageSharp.Rectangle(positions[i].X, positions[i].Y, cropWidth, cropHeight))
                 .Resize(Constants.RandomCropWidth, Constants.RandomCropHeight));
 
             cropped.Save(Path.Combine(outputDir, $"{name}-乱切{i + 1}.jpg"), encoder);
@@ -310,7 +306,7 @@ public class ImageProcessor : IImageProcessor
     /// <summary>
     /// 宫格拆分
     /// </summary>
-    private static int CropGrid(ImageSharpImage<Rgba32> image, string name, string outputDir, JpegEncoder encoder, int gridSize)
+    private static int CropGrid(SixLabors.ImageSharp.Image<Rgba32> image, string name, string outputDir, JpegEncoder encoder, int gridSize)
     {
         var index = 1;
         for (var row = 0; row < gridSize; row++)
@@ -324,7 +320,7 @@ public class ImageProcessor : IImageProcessor
                 var right = (col + 1) * image.Width / gridSize;
 
                 using var cropped = image.Clone(ctx => ctx.Crop(
-                    new ImageSharpRectangle(left, top, right - left, bottom - top)));
+                    new SixLabors.ImageSharp.Rectangle(left, top, right - left, bottom - top)));
 
                 cropped.Save(Path.Combine(outputDir, $"{name}-拆分{index++}.jpg"), encoder);
             }

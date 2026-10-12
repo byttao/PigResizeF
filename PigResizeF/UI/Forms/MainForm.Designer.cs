@@ -1,5 +1,6 @@
 using ReaLTaiizor.Controls;
 using ReaLTaiizor.Enum.Material;
+using System.Windows.Forms;
 
 namespace PigResizeF.UI.Forms;
 
@@ -9,9 +10,9 @@ namespace PigResizeF.UI.Forms;
 partial class MainForm
 {
     private MaterialTabControl tabControl;
-    private TabPage tabConvert;
-    private TabPage tabCrop;
-    private TabPage tabJdDetail;
+    private System.Windows.Forms.TabPage tabConvert;
+    private System.Windows.Forms.TabPage tabCrop;
+    private System.Windows.Forms.TabPage tabJdDetail;
 
     // 顶部工具栏
     private Panel topPanel;
