@@ -60,7 +60,7 @@
                 <Ellipse Stroke="#0064E0" StrokeThickness="1.5"
                          Fill="#0064E0" Width="18" Height="18" />
                 <Path Data="M5,9 L8,12 L13,6" Stroke="White" StrokeThickness="1.8"
-                      StrokeLineCap="Round" StrokeLineJoin="Round"
+                      StrokeLineCap="Round" StrokeJoin="Round"
                       HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Grid>
             </Grid>
