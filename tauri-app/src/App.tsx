@@ -63,7 +63,7 @@ function AppContent() {
           style={{ borderTop: `1px solid hsl(var(--border))` }}
         >
           <p className="text-[11px]" style={{ color: `hsl(var(--text-tertiary))` }}>
-            版本 V1.6.0
+            版本 V1.6.1
           </p>
           <button
             type="button"

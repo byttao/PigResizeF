@@ -1,6 +1,6 @@
 [package]
 name = "pig-resize"
-version = "1.6.0"
+version = "1.6.1"
 description = "图片批量裁切工具"
 authors = ["byttao"]
 edition = "2021"
