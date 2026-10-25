@@ -8,7 +8,7 @@ use image::{
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// 裁切模式，与原 C# 版本的 CropMode 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -723,15 +723,131 @@ fn save_jpeg(image: &DynamicImage, path: &Path, quality: u8) -> Result<(), Strin
 
 /// 并行读取图片尺寸，供前端预览排版使用。
 #[tauri::command]
-fn read_image_sizes(file_paths: Vec<String>) -> Vec<(String, u32, u32)> {
-    file_paths
-        .par_iter()
-        .filter_map(|path| {
-            let image = image::open(path).ok()?;
-            let (width, height) = image.dimensions();
-            Some((path.clone(), width, height))
-        })
-        .collect()
+async fn read_image_sizes(file_paths: Vec<String>) -> Result<Vec<(String, u32, u32)>, String> {
+    run_blocking(move || {
+        Ok(file_paths
+            .par_iter()
+            .filter_map(|path| {
+                let (width, height) = read_display_size(Path::new(path))?;
+                Some((path.clone(), width, height))
+            })
+            .collect())
+    })
+    .await
+}
+
+/// 只解析文件头获取尺寸，并按 EXIF 方向换算为实际显示的宽高。
+fn read_display_size(path: &Path) -> Option<(u32, u32)> {
+    use image::ImageReader;
+
+    let reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let mut decoder = reader.into_decoder().ok()?;
+    let (width, height) = decoder.dimensions();
+    let rotated = matches!(
+        decoder.orientation().unwrap_or(Orientation::NoTransforms),
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    );
+
+    Some(if rotated { (height, width) } else { (width, height) })
+}
+
+// ---------------------------------------------------------------------------
+// 京东详情页预览缩略图
+// ---------------------------------------------------------------------------
+
+/// 预览缩略图宽度，与原 C# 版本保持一致。
+const PREVIEW_THUMBNAIL_WIDTH: u32 = 1024;
+/// 生成超过该天数的缩略图在启动时清理，需要时会重新生成。
+const PREVIEW_CACHE_MAX_AGE_DAYS: u64 = 7;
+
+fn preview_cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("无法获取缓存目录: {e}"))?
+        .join("jd-preview");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建缓存目录: {e}"))?;
+    Ok(dir)
+}
+
+/// 生成（或复用）京东详情页预览缩略图，返回缩略图文件路径。
+/// 缓存按“路径 + 修改时间 + 文件大小”区分，原图被替换后会重新生成。
+#[tauri::command]
+async fn jd_preview_thumbnail(app: tauri::AppHandle, file_path: String) -> Result<String, String> {
+    let cache_dir = preview_cache_dir(&app)?;
+    run_blocking(move || {
+        ensure_preview_thumbnail(&cache_dir, &file_path)
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+fn ensure_preview_thumbnail(cache_dir: &Path, file_path: &str) -> Result<PathBuf, String> {
+    use std::hash::{Hash, Hasher};
+
+    let source = Path::new(&file_path);
+    let metadata = std::fs::metadata(source).map_err(|e| format!("无法读取文件信息: {e}"))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (&file_path, modified, metadata.len(), PREVIEW_THUMBNAIL_WIDTH).hash(&mut hasher);
+    let cached = cache_dir.join(format!("{:016x}.jpg", hasher.finish()));
+
+    if cached.exists() {
+        return Ok(cached);
+    }
+
+    let image = load_oriented_image(source)?;
+    let thumbnail = if image.width() > PREVIEW_THUMBNAIL_WIDTH {
+        let height = ((image.height() as f64 * PREVIEW_THUMBNAIL_WIDTH as f64
+            / image.width() as f64)
+            .round() as u32)
+            .max(1);
+        image.resize_exact(PREVIEW_THUMBNAIL_WIDTH, height, FilterType::Triangle)
+    } else {
+        image
+    };
+
+    // 先写临时文件再改名，避免并发请求读到写了一半的缩略图。
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = cached.with_extension(format!("{}-{sequence}.tmp", std::process::id()));
+    save_jpeg(&thumbnail, &temp, 85)?;
+    if let Err(error) = std::fs::rename(&temp, &cached) {
+        let _ = std::fs::remove_file(&temp);
+        // Windows 上目标已存在会改名失败，说明另一个请求已经写好了缩略图。
+        if !cached.exists() {
+            return Err(format!("无法写入缓存: {error}"));
+        }
+    }
+    Ok(cached)
+}
+
+/// 清理过期的预览缩略图。
+fn prune_preview_cache(app: &tauri::AppHandle) {
+    let Ok(dir) = preview_cache_dir(app) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let max_age = std::time::Duration::from_secs(PREVIEW_CACHE_MAX_AGE_DAYS * 24 * 60 * 60);
+
+    for entry in entries.flatten() {
+        let expired = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > max_age);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn main() {
@@ -739,6 +855,11 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || prune_preview_cache(&handle));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             batch_resize,
             batch_crop,
@@ -746,7 +867,42 @@ fn main() {
             detect_crop_mode_command,
             jd_export,
             read_image_sizes,
+            jd_preview_thumbnail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_thumbnail_is_scaled_and_reused() {
+        let dir = std::env::temp_dir().join(format!("pig-resize-test-{}", std::process::id()));
+        let cache_dir = dir.join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let source = dir.join("wide.jpg");
+        let image = RgbaImage::from_pixel(3000, 1500, Rgba([200, 80, 40, 255]));
+        save_jpeg(&DynamicImage::ImageRgba8(image), &source, 90).unwrap();
+        let source = source.to_string_lossy().into_owned();
+
+        let first = ensure_preview_thumbnail(&cache_dir, &source).unwrap();
+        let thumbnail = image::open(&first).unwrap();
+        assert_eq!(thumbnail.dimensions(), (PREVIEW_THUMBNAIL_WIDTH, 512));
+        assert_eq!(read_display_size(Path::new(&source)), Some((3000, 1500)));
+
+        // 第二次请求直接命中缓存，不会重新写文件。
+        let written_at = std::fs::metadata(&first).unwrap().modified().unwrap();
+        let second = ensure_preview_thumbnail(&cache_dir, &source).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(std::fs::metadata(&second).unwrap().modified().unwrap(), written_at);
+
+        // 缓存目录里不应残留临时文件。
+        let files = std::fs::read_dir(&cache_dir).unwrap().count();
+        assert_eq!(files, 1);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

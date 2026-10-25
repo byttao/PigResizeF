@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { JdPreview } from "./JdPreview";
 import { LogViewer } from "./LogViewer";
 import { ProgressPanel } from "./ProgressPanel";
 import { DropZone } from "./DropZone";
@@ -289,16 +290,7 @@ export function JdDetailsTab() {
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
             {previewReady && files.length > 0 ? (
-              <div
-                className="min-h-0 flex-1 overflow-auto rounded-md p-2 transition-colors duration-200"
-                style={{ backgroundColor: `hsl(var(--input-bg) / 0.5)` }}
-              >
-                <div className="mx-auto flex w-[790px] max-w-full flex-col gap-px">
-                  {files.map((item) => (
-                    <PreviewImage key={item.path} path={item.path} name={item.name} />
-                  ))}
-                </div>
-              </div>
+              <JdPreview files={files} />
             ) : (
               <div
                 className="flex min-h-0 flex-1 items-center justify-center rounded-md transition-colors duration-200"
@@ -331,37 +323,6 @@ export function JdDetailsTab() {
         </CardContent>
       </Card>
     </div>
-  );
-}
-
-function PreviewImage({ path, name }: { path: string; name: string }) {
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [path]);
-
-  if (failed) {
-    return (
-      <div
-        className="flex h-24 items-center justify-center text-[12px] transition-colors duration-200"
-        style={{
-          backgroundColor: `hsl(var(--muted))`,
-          color: `hsl(var(--text-tertiary))`,
-        }}
-      >
-        无法加载 {name}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={convertFileSrc(path)}
-      alt={name}
-      onError={() => setFailed(true)}
-      className="block w-full bg-white"
-    />
   );
 }
 

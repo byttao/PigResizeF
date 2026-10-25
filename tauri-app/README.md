@@ -49,6 +49,7 @@ tauri-app/
 │   │   ├── ImageConvertTab.tsx    # 图片转换
 │   │   ├── ImageCropTab.tsx       # 图片裁切
 │   │   ├── JdDetailsTab.tsx       # 京东详情页裁切
+│   │   ├── JdPreview.tsx          # 详情页拼接预览（虚拟滚动、缩略图、缩放）
 │   │   ├── ProgressPanel.tsx      # 实时进度条
 │   │   ├── DropZone.tsx / LogViewer.tsx
 │   │   └── ui/                    # 基础组件
@@ -69,3 +70,12 @@ tauri-app/
 ```
 
 `percent` 综合了文件序号和单张图片内部的阶段（读取、缩放、输出等），前端通过 `useBatchProgress` 订阅。
+
+## 京东详情页预览
+
+[JdPreview.tsx](src/components/JdPreview.tsx) 以 790 像素输出宽度为 100% 基准：
+
+- 尺寸：`read_image_sizes` 只解析文件头并按 EXIF 方向换算，用来预先算出每张图的位置。
+- 缩略图：`jd_preview_thumbnail` 生成 1024 像素宽的 JPG，存放在应用缓存目录的 `jd-preview/` 中，按“路径 + 修改时间 + 文件大小”区分；生成超过 7 天的缩略图会在启动时清理。
+- 只渲染可见区域上下 800 像素内的图片，同时最多生成 2 张缩略图，滚出视野且尚未开始的请求会被丢弃。
+- 尺寸和缩略图缓存放在模块级，调整顺序、缩放、关闭后重新预览都直接复用。
