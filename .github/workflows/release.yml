@@ -1,0 +1,92 @@
+name: Release
+
+# 推送 v* 标签时编译 Windows 与 macOS 版本，并上传到同名 Release 草稿。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            rust_targets: ""
+          - platform: macos-latest
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: tauri-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tauri-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: tauri-app/src-tauri -> target
+
+      - run: npm ci
+
+      - name: 编译 Windows 版本
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm run tauri build -- --bundles nsis
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force dist-release | Out-Null
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Copy-Item $setup.FullName "dist-release/PigResize_${version}_windows_x64-setup.exe"
+          # 便携版：主程序已内嵌前端资源，单个 exe 即可运行。
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item src-tauri/target/release/pig-resize.exe portable/PigResize.exe
+          Compress-Archive -Path portable/PigResize.exe -DestinationPath "dist-release/PigResize_${version}_windows_x64_portable.zip"
+
+      - name: 编译 macOS 版本
+        if: runner.os == 'macOS'
+        run: |
+          npm run tauri build -- --target universal-apple-darwin --bundles app
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          scripts/package-macos.sh \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos/图片批量裁切工具.app" \
+            "dist-release/PigResize_${version}_macos_universal.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ runner.os }}
+          path: tauri-app/dist-release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: 上传到 Release 草稿
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" assets/* --draft --title "$GITHUB_REF_NAME" --notes "" -R "$GITHUB_REPOSITORY"
+          fi

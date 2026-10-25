@@ -1,0 +1,222 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* 深色主题：slate/gray 系列 + orange-500 强调色 */
+  :root.dark {
+    --background: 222 47% 5%;        /* slate-950 */
+    --foreground: 210 40% 98%;
+
+    --card: 215 28% 17%;             /* gray-800 */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 215 28% 17%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 24 95% 53%;           /* orange-500 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 215 25% 27%;        /* gray-700 */
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 215 25% 20%;
+    --muted-foreground: 215 20% 65%; /* gray-400 */
+
+    --accent: 215 25% 27%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 20% 30%;           /* gray-600 */
+    --input: 215 20% 30%;
+    --ring: 24 95% 53%;
+
+    --radius: 0.5rem;
+
+    /* 深色主题专属变量 */
+    --sidebar-bg: 215 25% 17%;       /* gray-900 */
+    --main-bg: 215 28% 20%;          /* slate-900 */
+    --card-bg: 215 28% 17%;          /* gray-800 */
+    --input-bg: 222 47% 5%;          /* slate-950 */
+    --text-primary: 210 40% 98%;
+    --text-secondary: 215 20% 65%;   /* gray-400 */
+    --text-tertiary: 215 16% 47%;    /* gray-500 */
+    --hover-bg: 215 28% 17%;         /* gray-800 */
+    --active-bg: 215 25% 27%;        /* gray-700 */
+  }
+
+  /* 浅色主题：纯白底 + 浅橙点缀 + orange-500 强调色 */
+  :root.light {
+    --background: 0 0% 100%;         /* pure white */
+    --foreground: 222 47% 11%;       /* slate-900 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 24 95% 53%;           /* orange-500 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 24 100% 97%;        /* orange-50 */
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 24 100% 97%;
+    --muted-foreground: 215 16% 47%; /* gray-500 */
+
+    --accent: 24 100% 95%;           /* lighter orange */
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 24 30% 92%;            /* 浅橙灰边框 */
+    --input: 24 30% 92%;
+    --ring: 24 95% 53%;
+
+    --radius: 0.5rem;
+
+    /* 浅色主题专属变量 */
+    --sidebar-bg: 0 0% 100%;         /* pure white 侧边栏 */
+    --main-bg: 24 40% 98%;           /* 极浅暖色背景 */
+    --card-bg: 0 0% 100%;            /* pure white 卡片 */
+    --input-bg: 24 40% 98%;          /* 输入框和拖拽区浅暖色 */
+    --text-primary: 222 47% 11%;     /* slate-900 */
+    --text-secondary: 215 20% 40%;   /* 稍深的灰 */
+    --text-tertiary: 215 16% 55%;    /* gray-400 */
+    --hover-bg: 24 100% 96%;         /* 悬停浅橙 */
+    --active-bg: 24 100% 94%;        /* 激活稍深橙 */
+  }
+
+  /* 默认深色 */
+  :root {
+    --background: 222 47% 5%;
+    --foreground: 210 40% 98%;
+    --card: 215 28% 17%;
+    --card-foreground: 210 40% 98%;
+    --popover: 215 28% 17%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 24 95% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 215 25% 27%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 215 25% 20%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 215 25% 27%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 20% 30%;
+    --input: 215 20% 30%;
+    --ring: 24 95% 53%;
+    --radius: 0.5rem;
+
+    --sidebar-bg: 215 25% 17%;
+    --main-bg: 215 28% 20%;
+    --card-bg: 215 28% 17%;
+    --input-bg: 222 47% 5%;
+    --text-primary: 210 40% 98%;
+    --text-secondary: 215 20% 65%;
+    --text-tertiary: 215 16% 47%;
+    --hover-bg: 215 28% 17%;
+    --active-bg: 215 25% 27%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+    overflow: hidden;
+  }
+
+  /* 桌面应用：禁止在 chrome 区域选中文本 */
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable],
+  [data-ui-selectable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@layer components {
+  /* 侧边栏导航项 */
+  .sidebar-item {
+    @apply flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-[13px]
+           font-medium transition-all duration-200;
+    color: hsl(var(--text-secondary));
+  }
+
+  .sidebar-item:hover {
+    background-color: hsl(var(--hover-bg));
+    color: hsl(var(--text-primary));
+  }
+
+  .sidebar-item-active {
+    background-color: hsl(var(--active-bg));
+    color: hsl(var(--text-primary));
+    box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* 深色主题滚动条 */
+  .dark ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .dark ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: rgb(75 85 99 / 0.5);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: rgb(107 114 128 / 0.7);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+
+  /* 浅色主题滚动条 */
+  .light ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .light ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .light ::-webkit-scrollbar-thumb {
+    background: rgb(203 213 225 / 0.6);
+    border-radius: 6px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  .light ::-webkit-scrollbar-thumb:hover {
+    background: rgb(148 163 184 / 0.8);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+}
