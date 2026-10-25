@@ -61,7 +61,7 @@ jobs:
         run: |
           npm run tauri build -- --target universal-apple-darwin --bundles app
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          scripts/package-macos.sh \
+          bash scripts/package-macos.sh \
             "src-tauri/target/universal-apple-darwin/release/bundle/macos/图片批量裁切工具.app" \
             "dist-release/PigResize_${version}_macos_universal.zip"
 
