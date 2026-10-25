@@ -63,7 +63,7 @@ function clampZoom(value: number) {
 
 /**
  * 京东详情页拼接预览：只渲染可见区域附近的图片，图片使用后台生成的缩略图。
- * 按住 Ctrl（macOS 也可用 ⌘）滚动滚轮或在触控板捏合即可缩放。
+ * 按住 Ctrl（macOS 也可用 ⌘）滚动滚轮或在触控板捏合即可缩放，按住鼠标拖动可平移。
  */
 export function JdPreview({ files }: { files: PreviewEntry[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -74,6 +74,8 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
   const [sizeVersion, setSizeVersion] = useState(0);
   const pendingScroll = useRef<{ top: number; left: number } | null>(null);
   const zoomRef = useRef(1);
+  const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const [panning, setPanning] = useState(false);
 
   const refresh = useCallback(() => setCacheVersion((version) => version + 1), []);
 
@@ -84,11 +86,17 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
     };
   }, [refresh]);
 
+  // 每次渲染都按缓存实际内容计算缺失项，缓存被清空（例如开发时热更新）后也会自动补请求。
+  const missingSizesKey = files
+    .map((item) => item.path)
+    .filter((path) => !sizeCache.has(path))
+    .join("\n");
+
   // 只为尚未读取过的图片请求尺寸（仅解析文件头，速度很快）。
   useEffect(() => {
-    const missing = files
-      .map((item) => item.path)
-      .filter((path) => !sizeCache.has(path) && !sizeInflight.has(path));
+    const missing = missingSizesKey
+      ? missingSizesKey.split("\n").filter((path) => !sizeInflight.has(path))
+      : [];
     if (missing.length === 0) return;
 
     missing.forEach((path) => sizeInflight.add(path));
@@ -104,7 +112,7 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
         missing.forEach((path) => sizeInflight.delete(path));
         setSizeVersion((version) => version + 1);
       });
-  }, [files]);
+  }, [missingSizesKey]);
 
   // 跟踪容器尺寸，用于“适应宽度”和可见区域计算。
   useEffect(() => {
@@ -150,10 +158,14 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
     return layout.items.filter((item) => item.top + item.height >= start && item.top <= end);
   }, [layout, viewport.scrollTop, viewport.height]);
 
-  const visibleKey = visibleItems.map((item) => item.path).join("\n");
+  // 只看可见范围内还没有缩略图的图片；每完成一张，这个列表就会变化并继续补齐剩余的。
+  const missingThumbnailsKey = visibleItems
+    .map((item) => item.path)
+    .filter((path) => !thumbnailCache.has(path))
+    .join("\n");
   useEffect(() => {
-    requestThumbnails(visibleKey ? visibleKey.split("\n") : []);
-  }, [visibleKey]);
+    requestThumbnails(missingThumbnailsKey ? missingThumbnailsKey.split("\n") : []);
+  }, [missingThumbnailsKey]);
 
   // 离开预览时清空等待队列，已开始的请求完成后仍会写入缓存。
   useEffect(() => () => requestThumbnails([]), []);
@@ -221,6 +233,46 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
     });
   }, []);
 
+  // 按住鼠标左键拖动平移，放大后查看左右两侧的细节。
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const element = containerRef.current;
+    if (!element || event.button !== 0) return;
+
+    // 点在滚动条上时交给滚动条自己处理。
+    const rect = element.getBoundingClientRect();
+    if (
+      event.clientX - rect.left >= element.clientWidth ||
+      event.clientY - rect.top >= element.clientHeight
+    ) {
+      return;
+    }
+
+    panStart.current = {
+      x: event.clientX,
+      y: event.clientY,
+      left: element.scrollLeft,
+      top: element.scrollTop,
+    };
+    element.setPointerCapture(event.pointerId);
+    setPanning(true);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const element = containerRef.current;
+    const start = panStart.current;
+    if (!element || !start) return;
+
+    element.scrollLeft = start.left - (event.clientX - start.x);
+    element.scrollTop = start.top - (event.clientY - start.y);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!panStart.current) return;
+    panStart.current = null;
+    containerRef.current?.releasePointerCapture(event.pointerId);
+    setPanning(false);
+  };
+
   const zoomFromCenter = (factor: number) => {
     const element = containerRef.current;
     if (!element) return;
@@ -241,13 +293,13 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
       <div
         className="flex items-center justify-between gap-2 text-[12px]"
         style={{ color: `hsl(var(--text-tertiary))` }}
       >
         <span>
-          共 {files.length} 张 · 按住 Ctrl 滚动滚轮缩放
+          共 {files.length} 张 · 按住 Ctrl 滚动滚轮缩放，拖动可平移
         </span>
         <div className="flex items-center gap-1.5">
           <Button
@@ -291,8 +343,15 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="min-h-0 flex-1 overflow-auto rounded-md transition-colors duration-200"
-        style={{ backgroundColor: `hsl(var(--input-bg) / 0.5)` }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        className="min-h-0 min-w-0 flex-1 select-none overflow-auto rounded-md transition-colors duration-200"
+        style={{
+          backgroundColor: `hsl(var(--input-bg) / 0.5)`,
+          cursor: panning ? "grabbing" : "grab",
+        }}
       >
         <div
           className="relative"

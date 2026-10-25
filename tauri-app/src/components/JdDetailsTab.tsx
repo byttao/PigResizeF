@@ -199,7 +199,7 @@ export function JdDetailsTab() {
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_1fr] gap-4">
+      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] gap-4">
         <Card className="flex min-h-0 flex-col">
           <CardHeader>
             <CardTitle>详情图片</CardTitle>
@@ -284,7 +284,7 @@ export function JdDetailsTab() {
           </CardContent>
         </Card>
 
-        <Card className="flex min-h-0 flex-col">
+        <Card className="flex min-h-0 min-w-0 flex-col">
           <CardHeader>
             <CardTitle>拼接预览</CardTitle>
           </CardHeader>
