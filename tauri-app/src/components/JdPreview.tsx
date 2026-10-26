@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { Button } from "./ui/button";
+import { ColumnWidthOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
+import { Button, Tooltip } from "antd";
+import { cn } from "@/ui-kit";
 
 /** 预览以输出宽度 790 像素为 100% 基准。 */
 const OUTPUT_WIDTH = 790;
@@ -294,47 +296,29 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
-      <div
-        className="flex items-center justify-between gap-2 text-[12px]"
-        style={{ color: `hsl(var(--text-tertiary))` }}
-      >
-        <span>
-          共 {files.length} 张 · 按住 Ctrl 滚动滚轮缩放，拖动可平移
-        </span>
+      <div className="flex items-center justify-between gap-2 text-sm text-text-tertiary">
+        <span>共 {files.length} 张 · 按住 Ctrl（⌘）滚动滚轮缩放，拖动可平移</span>
         <div className="flex items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 px-0"
-            onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
-            disabled={zoom <= MIN_ZOOM}
-            title="缩小"
-          >
-            −
-          </Button>
-          <span
-            className="w-11 text-center tabular-nums"
-            style={{ color: `hsl(var(--text-primary))` }}
-          >
-            {Math.round(zoom * 100)}%
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 px-0"
-            onClick={() => zoomFromCenter(ZOOM_STEP)}
-            disabled={zoom >= MAX_ZOOM}
-            title="放大"
-          >
-            +
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2"
-            onClick={fitWidth}
-            disabled={manualZoom === null}
-          >
+          <Tooltip title="缩小">
+            <Button
+              size="small"
+              aria-label="缩小"
+              icon={<ZoomOutOutlined />}
+              onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
+              disabled={zoom <= MIN_ZOOM}
+            />
+          </Tooltip>
+          <span className="w-11 text-center tabular-nums text-text">{Math.round(zoom * 100)}%</span>
+          <Tooltip title="放大">
+            <Button
+              size="small"
+              aria-label="放大"
+              icon={<ZoomInOutlined />}
+              onClick={() => zoomFromCenter(ZOOM_STEP)}
+              disabled={zoom >= MAX_ZOOM}
+            />
+          </Tooltip>
+          <Button size="small" icon={<ColumnWidthOutlined />} onClick={fitWidth} disabled={manualZoom === null}>
             适应宽度
           </Button>
         </div>
@@ -347,11 +331,10 @@ export function JdPreview({ files }: { files: PreviewEntry[] }) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        className="min-h-0 min-w-0 flex-1 select-none overflow-auto rounded-md transition-colors duration-200"
-        style={{
-          backgroundColor: `hsl(var(--input-bg) / 0.5)`,
-          cursor: panning ? "grabbing" : "grab",
-        }}
+        className={cn(
+          "min-h-0 min-w-0 flex-1 select-none overflow-auto rounded bg-fill-quaternary",
+          panning ? "cursor-grabbing" : "cursor-grab"
+        )}
       >
         <div
           className="relative"
@@ -408,13 +391,8 @@ function PreviewTile({
 
   return (
     <div
-      className="absolute left-0 flex w-full items-center justify-center overflow-hidden text-[12px]"
-      style={{
-        ...style,
-        backgroundColor: `hsl(var(--muted))`,
-        color: `hsl(var(--text-tertiary))`,
-        borderBottom: `1px solid hsl(var(--border) / 0.4)`,
-      }}
+      className="absolute left-0 flex w-full items-center justify-center overflow-hidden border-b bg-fill-tertiary text-sm text-text-secondary"
+      style={style}
     >
       {thumbnail?.status === "failed" ? `无法加载 ${name}` : `正在生成预览 ${name}`}
     </div>

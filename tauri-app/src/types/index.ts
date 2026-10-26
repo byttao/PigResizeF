@@ -12,27 +12,9 @@ export interface CropJob {
   mode: CropMode;
 }
 
-export interface ProgressEvent {
-  current: number;
-  total: number;
-  file_name: string;
-  /** 0~100，综合文件序号与单张内部阶段。 */
-  percent: number;
-  stage: string;
-}
-
 export interface BatchResult {
   success: boolean;
   message: string;
   output_count: number;
   failed_files: string[];
-}
-
-export type LogLevel = "info" | "success" | "warning" | "error" | "processing";
-
-export interface LogEntry {
-  id: string;
-  time: string;
-  level: LogLevel;
-  message: string;
 }

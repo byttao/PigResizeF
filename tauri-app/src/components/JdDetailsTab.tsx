@@ -1,15 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "./ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, EyeOutlined } from "@ant-design/icons";
+import { Button, Empty, Typography } from "antd";
+import {
+  DropZone,
+  FileRow,
+  ListWell,
+  LogViewer,
+  Page,
+  Panel,
+  ProgressPanel,
+  fileName,
+  useBatchProgress,
+  useFileDrop,
+  useLogger,
+} from "@/ui-kit";
+import { IMAGE_EXTENSIONS } from "@/lib/images";
 import { JdPreview } from "./JdPreview";
-import { LogViewer } from "./LogViewer";
-import { ProgressPanel } from "./ProgressPanel";
-import { DropZone } from "./DropZone";
-import { useLogger } from "@/hooks/useLogger";
-import { useFileDrop } from "@/hooks/useFileDrop";
-import { useBatchProgress } from "@/hooks/useBatchProgress";
 import type { BatchResult } from "@/types";
 
 interface JdEntry {
@@ -22,53 +30,45 @@ export function JdDetailsTab() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [previewReady, setPreviewReady] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const { logs, addLog } = useLogger();
+  const { logs, log } = useLogger();
   const { progress, start, finish } = useBatchProgress("jd-progress", (event) =>
-    addLog(`[*] 正在处理: ${event.file_name}`, "processing")
+    log(`[*] 正在处理: ${event.file_name}`, "processing")
   );
+
+  // 去重要基于最新列表；不在 setFiles 的更新函数里写日志（StrictMode 会执行两遍，日志重复）
+  const filesRef = useRef<JdEntry[]>([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   const appendFiles = useCallback(
     (paths: string[]) => {
-      setFiles((prev) => {
-        const existing = new Set(prev.map((item) => item.path));
-        const fresh = paths.filter((path) => !existing.has(path));
+      const existing = new Set(filesRef.current.map((item) => item.path));
+      const fresh = [...new Set(paths)].filter((path) => !existing.has(path));
+      if (fresh.length === 0) return;
 
-        if (fresh.length === 0) {
-          return prev;
-        }
-
-        const sorted = [...fresh].sort((a, b) =>
-          splitName(a).localeCompare(splitName(b), "zh-CN", { sensitivity: "base" })
-        );
-
-        addLog(`京东详情页：已添加 ${sorted.length} 张图片。`, "info");
-        return [...prev, ...sorted.map((path) => ({ path, name: splitName(path) }))];
-      });
-    },
-    [addLog]
-  );
-
-  const handleDropped = useCallback(
-    (paths: string[]) => {
-      appendFiles(paths);
+      const sorted = [...fresh].sort((a, b) =>
+        fileName(a).localeCompare(fileName(b), "zh-CN", { sensitivity: "base" })
+      );
+      const next = [...filesRef.current, ...sorted.map((path) => ({ path, name: fileName(path) }))];
+      filesRef.current = next;
+      setFiles(next);
       setPreviewReady(false);
+      log(`京东详情页：已添加 ${sorted.length} 张图片。`, "info");
     },
-    [appendFiles]
+    [log]
   );
 
-  const { isDragging, setDragging } = useFileDrop(handleDropped);
-
+  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS });
 
   const handleSelectFiles = useCallback(async () => {
     const selectedPaths = await open({
       multiple: true,
-      filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "bmp", "gif"] }],
+      filters: [{ name: "Images", extensions: IMAGE_EXTENSIONS }],
     });
 
     if (!selectedPaths) return;
-    const paths = Array.isArray(selectedPaths) ? selectedPaths : [selectedPaths];
-    appendFiles(paths);
-    setPreviewReady(false);
+    appendFiles(Array.isArray(selectedPaths) ? selectedPaths : [selectedPaths]);
   }, [appendFiles]);
 
   const handleItemClick = useCallback(
@@ -78,8 +78,8 @@ export function JdDetailsTab() {
 
         if (event.shiftKey && files.length > 0) {
           const anchor = prev.size > 0 ? Math.min(...prev) : 0;
-          const [start, end] = anchor < index ? [anchor, index] : [index, anchor];
-          for (let i = start; i <= end; i += 1) {
+          const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+          for (let i = from; i <= to; i += 1) {
             next.add(i);
           }
           return next;
@@ -154,22 +154,22 @@ export function JdDetailsTab() {
 
   const handlePreview = useCallback(() => {
     if (files.length === 0) {
-      addLog("请先拖拽详情图片到列表。", "warning");
+      log("请先拖拽详情图片到列表。", "warning");
       return;
     }
     setPreviewReady(true);
-    addLog(`京东详情页：已加载 ${files.length} 张图片预览。`, "info");
-  }, [files.length, addLog]);
+    log(`京东详情页：已加载 ${files.length} 张图片预览。`, "info");
+  }, [files.length, log]);
 
   const handleExport = useCallback(async () => {
     if (files.length === 0) {
-      addLog("请先拖拽详情图片到列表。", "warning");
+      log("请先拖拽详情图片到列表。", "warning");
       return;
     }
 
     setProcessing(true);
     start(files.length);
-    addLog(`京东详情页：开始输出 ${files.length} 张图片。`, "processing");
+    log(`京东详情页：开始输出 ${files.length} 张图片。`, "processing");
 
     try {
       const outputDir = files[0].path.replace(/[/\\][^/\\]*$/, "");
@@ -179,18 +179,18 @@ export function JdDetailsTab() {
         outputDir,
       });
 
-      addLog(result.message, "success");
+      log(result.message, "success");
       finish(`输出完成，共 ${result.output_count} 张`);
       setFiles([]);
       setSelected(new Set());
       setPreviewReady(false);
     } catch (error) {
-      addLog(`京东详情页输出失败：${error}`, "error");
+      log(`京东详情页输出失败：${error}`, "error");
       finish("输出中断", false);
     } finally {
       setProcessing(false);
     }
-  }, [files, addLog, start, finish]);
+  }, [files, log, start, finish]);
 
   const selectedIndices = useMemo(() => [...selected].sort((a, b) => a - b), [selected]);
   const canMoveUp = selectedIndices.length > 0 && selectedIndices[0] > 0;
@@ -198,135 +198,92 @@ export function JdDetailsTab() {
     selectedIndices.length > 0 && selectedIndices[selectedIndices.length - 1] < files.length - 1;
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)] gap-4">
-        <Card className="flex min-h-0 flex-col">
-          <CardHeader>
-            <CardTitle>详情图片</CardTitle>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-            <DropZone
-              isDragging={isDragging}
-              onDragOver={() => setDragging(true)}
-              onDragLeave={() => setDragging(false)}
-              onClick={handleSelectFiles}
-              label="拖拽详情图片到此处，或点击选择"
-            />
-
-            <div
-              className="min-h-0 flex-1 overflow-auto rounded-md transition-colors duration-200"
-              style={{ backgroundColor: `hsl(var(--input-bg) / 0.4)` }}
-            >
-              {files.length === 0 ? (
-                <p
-                  className="p-4 text-center text-[13px]"
-                  style={{ color: `hsl(var(--text-tertiary))` }}
-                >
-                  暂无图片
-                </p>
-              ) : (
-                <ul className="p-1">
-                  {files.map((item, index) => (
-                    <li
-                      key={item.path}
-                      onClick={(e) => handleItemClick(index, e)}
-                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] transition-all duration-200"
-                      style={
-                        selected.has(index)
-                          ? {
-                              backgroundColor: "hsl(24 95% 53% / 0.15)",
-                              color: "hsl(var(--text-primary))",
-                              boxShadow: "inset 0 0 0 1px hsl(24 95% 53% / 0.5)",
-                            }
-                          : {
-                              color: `hsl(var(--text-primary))`,
-                            }
-                      }
-                    >
-                      <span
-                        className="w-5 shrink-0"
-                        style={{
-                          color: selected.has(index)
-                            ? "hsl(24 95% 53%)"
-                            : `hsl(var(--text-tertiary))`,
-                        }}
-                      >
-                        {index + 1}
-                      </span>
-                      <span className="truncate" title={item.path}>
-                        {item.name}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="ghost" size="sm" onClick={moveUp} disabled={!canMoveUp}>
-                上移
-              </Button>
-              <Button variant="ghost" size="sm" onClick={moveDown} disabled={!canMoveDown}>
-                下移
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={deleteSelected}
-                disabled={selected.size === 0}
-              >
-                删除
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handlePreview}>
-                拼接预览
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="flex min-h-0 min-w-0 flex-col">
-          <CardHeader>
-            <CardTitle>拼接预览</CardTitle>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-            {previewReady && files.length > 0 ? (
-              <JdPreview files={files} />
+    <Page>
+      {/* 左侧列表与右侧预览：列表栏宽度与其他页面的设置栏一致（300px），切页时不跳 */}
+      <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] gap-5">
+        <Panel
+          fill
+          title="详情图片"
+          extra={<Typography.Text type="secondary">{files.length} 张</Typography.Text>}
+        >
+          <DropZone
+            active={hovering}
+            compact={files.length > 0}
+            disabled={processing}
+            onBrowse={() => void handleSelectFiles()}
+            title="拖入详情图片，或点击选择"
+          />
+          <ListWell>
+            {files.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无图片" className="py-9" />
             ) : (
-              <div
-                className="flex min-h-0 flex-1 items-center justify-center rounded-md transition-colors duration-200"
-                style={{ backgroundColor: `hsl(var(--input-bg) / 0.5)` }}
-              >
-                <p className="text-[13px]" style={{ color: `hsl(var(--text-tertiary))` }}>
-                  点击「拼接预览」查看整体顺序
-                </p>
-              </div>
+              <ul className="m-0 list-none p-0" aria-multiselectable>
+                {files.map((item, index) => (
+                  <FileRow
+                    key={item.path}
+                    index={index + 1}
+                    selected={selected.has(index)}
+                    title={item.path}
+                    onClick={(event) => handleItemClick(index, event)}
+                  >
+                    {item.name}
+                  </FileRow>
+                ))}
+              </ul>
             )}
-
-            <ProgressPanel progress={progress} />
-
-            <Button
-              onClick={() => void handleExport()}
-              disabled={processing || files.length === 0}
-            >
-              {processing ? "输出中..." : "输出"}
+          </ListWell>
+          <Typography.Text type="secondary" className="text-sm">
+            Shift 连选、Ctrl / ⌘ 多选，Delete 键删除
+          </Typography.Text>
+          <div className="grid grid-cols-2 gap-2">
+            <Button size="small" icon={<ArrowUpOutlined />} disabled={!canMoveUp} onClick={moveUp}>
+              上移
             </Button>
-          </CardContent>
-        </Card>
+            <Button size="small" icon={<ArrowDownOutlined />} disabled={!canMoveDown} onClick={moveDown}>
+              下移
+            </Button>
+            {/* 只从列表移除，不删原图；按危险操作约束用描边 + 图标 */}
+            <Button
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              disabled={selected.size === 0}
+              onClick={deleteSelected}
+            >
+              删除
+            </Button>
+            <Button size="small" icon={<EyeOutlined />} disabled={files.length === 0} onClick={handlePreview}>
+              拼接预览
+            </Button>
+          </div>
+        </Panel>
+
+        <Panel fill className="min-w-0" title="拼接预览">
+          {previewReady && files.length > 0 ? (
+            <JdPreview files={files} />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center rounded bg-fill-quaternary">
+              <Typography.Text type="secondary">点击「拼接预览」查看整体顺序</Typography.Text>
+            </div>
+          )}
+
+          <ProgressPanel progress={progress} />
+
+          <Button
+            type="primary"
+            block
+            loading={processing}
+            disabled={files.length === 0}
+            onClick={() => void handleExport()}
+          >
+            {processing ? "输出中…" : `输出 · ${files.length} 张`}
+          </Button>
+        </Panel>
       </div>
 
-      <Card className="flex h-[150px] shrink-0 flex-col">
-        <CardHeader className="py-2">
-          <CardTitle>处理日志</CardTitle>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 py-2">
-          <LogViewer logs={logs} />
-        </CardContent>
-      </Card>
-    </div>
+      <Panel fill title="处理日志" size="small" className="h-[170px] shrink-0">
+        <LogViewer logs={logs} />
+      </Panel>
+    </Page>
   );
-}
-
-function splitName(path: string): string {
-  const parts = path.split(/[/\\]/);
-  return parts[parts.length - 1] || path;
 }

@@ -1,14 +1,22 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { Button } from "./ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
-import { ProgressPanel } from "./ProgressPanel";
-import { LogViewer } from "./LogViewer";
-import { DropZone } from "./DropZone";
-import { useLogger } from "@/hooks/useLogger";
-import { useFileDrop } from "@/hooks/useFileDrop";
-import { useBatchProgress } from "@/hooks/useBatchProgress";
+import { Button, Empty, Radio, Space, Typography } from "antd";
+import {
+  DropZone,
+  FileRow,
+  ListWell,
+  LogViewer,
+  Page,
+  Panel,
+  ProgressPanel,
+  Workspace,
+  fileName,
+  useBatchProgress,
+  useFileDrop,
+  useLogger,
+} from "@/ui-kit";
+import { IMAGE_EXTENSIONS } from "@/lib/images";
 import type { BatchResult, ResizePreset } from "@/types";
 
 const PRESETS: { value: ResizePreset; label: string }[] = [
@@ -22,42 +30,41 @@ export function ImageConvertTab() {
   const [files, setFiles] = useState<string[]>([]);
   const [preset, setPreset] = useState<ResizePreset>("Square1440");
   const [processing, setProcessing] = useState(false);
-  const { logs, addLog } = useLogger();
+  const { logs, log } = useLogger();
   const { progress, start, finish } = useBatchProgress("resize-progress", (event) =>
-    addLog(`[*] 正在处理: ${event.file_name}`, "processing")
+    log(`[*] 正在处理: ${event.file_name}`, "processing")
   );
+
+  // 去重要基于最新列表；不在 setFiles 的更新函数里写日志（StrictMode 会执行两遍，日志重复）
+  const filesRef = useRef<string[]>([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   /** 追加文件，自动去重。 */
   const appendFiles = useCallback(
     (paths: string[]) => {
-      setFiles((prev) => {
-        const existing = new Set(prev);
-        const added = paths.filter((path) => !existing.has(path));
-        if (added.length > 0) {
-          addLog(`成功追加 ${added.length} 张图片。`, "info");
-          added.forEach((path) => addLog(`  + ${splitName(path)}`, "info"));
-          addLog(`当前列表共有 ${prev.length + added.length} 张图片。`, "info");
-          return [...prev, ...added];
-        }
-        return prev;
-      });
+      const existing = new Set(filesRef.current);
+      const added = [...new Set(paths)].filter((path) => !existing.has(path));
+      if (added.length === 0) return;
+
+      const next = [...filesRef.current, ...added];
+      filesRef.current = next;
+      setFiles(next);
+      log(`成功追加 ${added.length} 张图片。`, "info");
+      added.forEach((path) => log(`  + ${fileName(path)}`, "info"));
+      log(`当前列表共有 ${next.length} 张图片。`, "info");
     },
-    [addLog]
+    [log]
   );
 
-  // 拖入文件时追加到列表末尾，已存在的路径不重复加入。
-  const handleDropped = useCallback(
-    (paths: string[]) => appendFiles(paths),
-    [appendFiles]
-  );
-
-  const { isDragging, setDragging } = useFileDrop(handleDropped);
-
+  // 拖到窗口任意位置都会追加到列表末尾，已存在的路径不重复加入。
+  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS });
 
   const handleSelectFiles = useCallback(async () => {
     const selected = await open({
       multiple: true,
-      filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "bmp", "gif"] }],
+      filters: [{ name: "Images", extensions: IMAGE_EXTENSIONS }],
     });
 
     if (!selected) return;
@@ -67,24 +74,22 @@ export function ImageConvertTab() {
 
   const handleConvert = useCallback(async () => {
     if (files.length === 0) {
-      addLog("请先拖拽图片或指定文件夹。", "error");
+      log("请先拖拽图片或指定文件夹。", "error");
       return;
     }
 
     setProcessing(true);
     start(files.length);
-    addLog("开始处理图片...", "info");
+    log("开始处理图片...", "info");
 
     try {
       const result = await invoke<BatchResult>("batch_resize", { files, preset });
 
       result.failed_files.forEach((path) => {
-        addLog(`    [!] 处理失败 - ${splitName(path)}`, "error");
+        log(`    [!] 处理失败 - ${fileName(path)}`, "error");
       });
-      addLog(result.message, result.success ? "success" : "warning");
-      finish(
-        result.success ? "转换完成" : `转换完成，${result.failed_files.length} 张失败`
-      );
+      log(result.message, result.success ? "success" : "warning");
+      finish(result.success ? "转换完成" : `转换完成，${result.failed_files.length} 张失败`);
 
       if (result.success) {
         setFiles([]);
@@ -92,138 +97,91 @@ export function ImageConvertTab() {
         setFiles((prev) => prev.filter((path) => !result.failed_files.includes(path)));
       }
     } catch (error) {
-      addLog(`处理失败：${error}`, "error");
+      log(`处理失败：${error}`, "error");
       finish("转换中断", false);
     } finally {
       setProcessing(false);
     }
-  }, [files, preset, addLog, start, finish]);
+  }, [files, preset, log, start, finish]);
 
   const handleClear = useCallback(() => {
     setFiles([]);
-    addLog("图片列表已清空。", "info");
-  }, [addLog]);
+    log("图片列表已清空。", "info");
+  }, [log]);
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_240px] gap-4">
-        <Card className="flex min-h-0 flex-col">
-          <CardHeader>
-            <CardTitle>待转换图片</CardTitle>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
-            <DropZone
-              isDragging={isDragging}
-              onDragOver={() => setDragging(true)}
-              onDragLeave={() => setDragging(false)}
-              onClick={handleSelectFiles}
-            />
-
-            <div
-              className="min-h-0 flex-1 overflow-auto rounded-md transition-colors duration-200"
-              style={{ backgroundColor: `hsl(var(--input-bg) / 0.4)` }}
-            >
-              {files.length === 0 ? (
-                <p
-                  className="p-4 text-center text-[13px]"
-                  style={{ color: `hsl(var(--text-tertiary))` }}
-                >
-                  暂无图片
-                </p>
-              ) : (
-                <ul className="p-1">
-                  {files.map((path, index) => (
-                    <li
-                      key={`${path}-${index}`}
-                      className="flex items-center gap-2 rounded px-2 py-1.5 text-[13px] transition-all duration-200"
-                      style={{ color: `hsl(var(--text-primary))` }}
-                    >
-                      <span className="w-5 text-right" style={{ color: `hsl(var(--text-tertiary))` }}>
-                        {index + 1}.
-                      </span>
-                      <span className="truncate" title={path}>
-                        {splitName(path)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <Button onClick={handleSelectFiles} disabled={processing}>
-                选择图片
-              </Button>
+    <Page>
+      <Workspace
+        aside={
+          <>
+            <Panel title="转换样式">
+              <Radio.Group
+                orientation="vertical"
+                value={preset}
+                disabled={processing}
+                onChange={(e) => setPreset(e.target.value)}
+                options={PRESETS}
+              />
+            </Panel>
+            <div className="mt-auto flex flex-col gap-3">
+              <ProgressPanel progress={progress} />
               <Button
-                variant="ghost"
-                onClick={handleClear}
+                type="primary"
+                block
+                loading={processing}
+                disabled={files.length === 0}
+                onClick={() => void handleConvert()}
+              >
+                {processing ? "转换中…" : `开始转换 · ${files.length} 张`}
+              </Button>
+            </div>
+          </>
+        }
+      >
+        <Panel
+          fill
+          className="flex-1"
+          title="待转换图片"
+          extra={
+            <Space size="small">
+              <Typography.Text type="secondary">{files.length} 张</Typography.Text>
+              <Button
+                type="link"
+                size="small"
                 disabled={processing || files.length === 0}
+                onClick={handleClear}
               >
                 清空列表
               </Button>
-            </div>
-          </CardContent>
-        </Card>
+            </Space>
+          }
+        >
+          <DropZone
+            active={hovering}
+            compact={files.length > 0}
+            disabled={processing}
+            onBrowse={() => void handleSelectFiles()}
+            hint="JPG、PNG、BMP、GIF · 可批量添加"
+          />
+          <ListWell>
+            {files.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无图片" className="py-9" />
+            ) : (
+              <ul className="m-0 list-none p-0">
+                {files.map((path, index) => (
+                  <FileRow key={`${path}-${index}`} index={index + 1} title={path}>
+                    {fileName(path)}
+                  </FileRow>
+                ))}
+              </ul>
+            )}
+          </ListWell>
+        </Panel>
+      </Workspace>
 
-        <Card className="flex flex-col">
-          <CardHeader>
-            <CardTitle>转换样式</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-1 flex-col gap-4">
-            <div className="flex flex-col gap-1">
-              {PRESETS.map((item) => (
-                <label
-                  key={item.value}
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] transition-all duration-200"
-                  style={
-                    preset === item.value
-                      ? {
-                          backgroundColor: `hsl(var(--active-bg))`,
-                          color: `hsl(var(--text-primary))`,
-                        }
-                      : {
-                          color: `hsl(var(--text-secondary))`,
-                        }
-                  }
-                >
-                  <input
-                    type="radio"
-                    name="preset"
-                    checked={preset === item.value}
-                    onChange={() => setPreset(item.value)}
-                    disabled={processing}
-                    className="accent-orange-500"
-                  />
-                  {item.label}
-                </label>
-              ))}
-            </div>
-
-            <div className="mt-auto flex flex-col gap-3">
-              <ProgressPanel progress={progress} />
-
-              <Button onClick={handleConvert} disabled={processing || files.length === 0}>
-                {processing ? "转换中..." : "转换"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="flex h-[180px] shrink-0 flex-col">
-        <CardHeader className="py-2">
-          <CardTitle>处理日志</CardTitle>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 py-2">
-          <LogViewer logs={logs} />
-        </CardContent>
-      </Card>
-    </div>
+      <Panel fill title="处理日志" size="small" className="h-[170px] shrink-0">
+        <LogViewer logs={logs} />
+      </Panel>
+    </Page>
   );
-}
-
-/** 从路径中取出文件名。 */
-function splitName(path: string): string {
-  const parts = path.split(/[/\\]/);
-  return parts[parts.length - 1] || path;
 }
