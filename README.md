@@ -81,7 +81,9 @@ npm install
 npm run tauri build
 ```
 
-开发说明见 [tauri-app/README.md](tauri-app/README.md)。旧版 .NET WinForms 源码仍保留在 `PigResizeF/` 目录中。
+开发说明见 [tauri-app/README.md](tauri-app/README.md)。
+
+旧版 .NET WinForms 源码已从当前版本移除，可在 GitHub 历史中查看：最后发布的 .NET 版本是 [v1.5](https://github.com/byttao/PigResizeF/tree/v1.5)，移除前的最终源码见 [v1.6.1 标签下的 `PigResizeF/` 目录](https://github.com/byttao/PigResizeF/tree/v1.6.1/PigResizeF)。
 
 ## 版本
 
