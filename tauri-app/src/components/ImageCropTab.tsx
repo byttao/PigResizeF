@@ -5,6 +5,8 @@ import { FolderOpenOutlined } from "@ant-design/icons";
 import { Button, Checkbox, Empty, Radio, Select, Table, Typography } from "antd";
 import {
   DropZone,
+  FILE_ROW_ERROR_CLASS,
+  FailedMark,
   ListWell,
   LogViewer,
   Page,
@@ -40,6 +42,8 @@ export function ImageCropTab() {
   const [useCustomOutput, setUseCustomOutput] = useState(false);
   const [customOutputDir, setCustomOutputDir] = useState("");
   const [processing, setProcessing] = useState(false);
+  /** 上次处理失败、仍留在列表里的文件，用次级危险样式标出 */
+  const [failed, setFailed] = useState<Set<string>>(new Set());
   const { logs, log } = useLogger();
   const { progress, start, finish } = useBatchProgress("crop-progress", (event) =>
     log(`[*] 正在处理: ${event.file_name}`, "processing")
@@ -67,6 +71,7 @@ export function ImageCropTab() {
         return;
       }
 
+      const processed = new Set(jobs.map((item) => item.path));
       setProcessing(true);
       start(jobs.length);
       log(`图片裁切：开始处理 ${jobs.length} 张图片。`, "processing");
@@ -82,21 +87,29 @@ export function ImageCropTab() {
           outputDir: useCustomOutput ? customOutputDir : null,
         });
 
+        const failedNow = new Set(result.failed_files);
         result.failed_files.forEach((path) => {
           log(`    [!] 处理失败 - ${fileName(path)}`, "error");
         });
         log(result.message, result.success ? "success" : "warning");
+        if (failedNow.size > 0) {
+          log(`失败的 ${failedNow.size} 张已保留在列表中，可调整模式后重试。`, "warning");
+        }
         finish(
           result.success
             ? `裁切完成，输出 ${result.output_count} 张`
-            : `裁切完成，${result.failed_files.length} 张失败`
+            : `裁切完成，${failedNow.size} 张失败`
         );
 
-        if (result.success) {
-          setFiles([]);
-        } else {
-          setFiles((prev) => prev.filter((item) => !result.failed_files.includes(item.path)));
-        }
+        // 这次处理过且成功的移出列表；失败的留下并标红；没参与这次处理的（快速模式下的其余图片）不动
+        setFiles((prev) =>
+          prev.filter((item) => !processed.has(item.path) || failedNow.has(item.path))
+        );
+        setFailed((prev) => {
+          const next = new Set([...prev].filter((path) => !processed.has(path)));
+          failedNow.forEach((path) => next.add(path));
+          return next;
+        });
       } catch (error) {
         log(`图片裁切失败：${error}`, "error");
         finish("裁切中断", false);
@@ -285,6 +298,7 @@ export function ImageCropTab() {
                 size="small"
                 pagination={false}
                 rowKey="path"
+                rowClassName={(item) => (failed.has(item.path) ? FILE_ROW_ERROR_CLASS : "")}
                 sticky={{ getContainer: () => wellRef.current ?? document.body }}
                 dataSource={files}
                 columns={[
@@ -292,7 +306,12 @@ export function ImageCropTab() {
                     title: "图片文件",
                     dataIndex: "name",
                     ellipsis: { showTitle: false },
-                    render: (name: string, item) => <span title={item.path}>{name}</span>,
+                    render: (name: string, item) => (
+                      <span className="flex items-center gap-2" title={item.path}>
+                        <span className="min-w-0 truncate">{name}</span>
+                        {failed.has(item.path) && <FailedMark />}
+                      </span>
+                    ),
                   },
                   {
                     title: "识别模式",

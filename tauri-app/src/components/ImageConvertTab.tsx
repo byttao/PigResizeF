@@ -30,6 +30,8 @@ export function ImageConvertTab() {
   const [files, setFiles] = useState<string[]>([]);
   const [preset, setPreset] = useState<ResizePreset>("Square1440");
   const [processing, setProcessing] = useState(false);
+  /** 上次处理失败、仍留在列表里的文件，用次级危险样式标出 */
+  const [failed, setFailed] = useState<Set<string>>(new Set());
   const { logs, log } = useLogger();
   const { progress, start, finish } = useBatchProgress("resize-progress", (event) =>
     log(`[*] 正在处理: ${event.file_name}`, "processing")
@@ -78,24 +80,27 @@ export function ImageConvertTab() {
       return;
     }
 
+    const processed = new Set(files);
     setProcessing(true);
     start(files.length);
     log("开始处理图片...", "info");
 
     try {
       const result = await invoke<BatchResult>("batch_resize", { files, preset });
+      const failedNow = new Set(result.failed_files);
 
       result.failed_files.forEach((path) => {
         log(`    [!] 处理失败 - ${fileName(path)}`, "error");
       });
       log(result.message, result.success ? "success" : "warning");
-      finish(result.success ? "转换完成" : `转换完成，${result.failed_files.length} 张失败`);
-
-      if (result.success) {
-        setFiles([]);
-      } else {
-        setFiles((prev) => prev.filter((path) => !result.failed_files.includes(path)));
+      if (failedNow.size > 0) {
+        log(`失败的 ${failedNow.size} 张已保留在列表中，可调整后重试。`, "warning");
       }
+      finish(result.success ? "转换完成" : `转换完成，${failedNow.size} 张失败`);
+
+      // 这次处理过且成功的移出列表；失败的留下并标红；处理期间新加的不动
+      setFiles((prev) => prev.filter((path) => !processed.has(path) || failedNow.has(path)));
+      setFailed(failedNow);
     } catch (error) {
       log(`处理失败：${error}`, "error");
       finish("转换中断", false);
@@ -106,6 +111,7 @@ export function ImageConvertTab() {
 
   const handleClear = useCallback(() => {
     setFiles([]);
+    setFailed(new Set());
     log("图片列表已清空。", "info");
   }, [log]);
 
@@ -169,7 +175,12 @@ export function ImageConvertTab() {
             ) : (
               <ul className="m-0 list-none p-0">
                 {files.map((path, index) => (
-                  <FileRow key={`${path}-${index}`} index={index + 1} title={path}>
+                  <FileRow
+                    key={`${path}-${index}`}
+                    index={index + 1}
+                    title={path}
+                    status={failed.has(path) ? "error" : undefined}
+                  >
                     {fileName(path)}
                   </FileRow>
                 ))}
