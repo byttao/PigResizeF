@@ -26,7 +26,7 @@ const PRESETS: { value: ResizePreset; label: string }[] = [
   { value: "ProductTall", label: "商品长图" },
 ];
 
-export function ImageConvertTab() {
+export function ImageConvertTab({ active = true }: { active?: boolean }) {
   const [files, setFiles] = useState<string[]>([]);
   const [preset, setPreset] = useState<ResizePreset>("Square1440");
   const [processing, setProcessing] = useState(false);
@@ -60,8 +60,8 @@ export function ImageConvertTab() {
     [log]
   );
 
-  // 拖到窗口任意位置都会追加到列表末尾，已存在的路径不重复加入。
-  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS });
+  // 拖到窗口任意位置都会追加到列表末尾，已存在的路径不重复加入；只有当前显示的页签接收
+  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS, enabled: active });
 
   const handleSelectFiles = useCallback(async () => {
     const selected = await open({

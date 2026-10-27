@@ -25,7 +25,7 @@ interface JdEntry {
   name: string;
 }
 
-export function JdDetailsTab() {
+export function JdDetailsTab({ active = true }: { active?: boolean }) {
   const [files, setFiles] = useState<JdEntry[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [previewReady, setPreviewReady] = useState(false);
@@ -59,7 +59,8 @@ export function JdDetailsTab() {
     [log]
   );
 
-  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS });
+  // 只有当前显示的页签接收拖入
+  const { hovering } = useFileDrop(appendFiles, { extensions: IMAGE_EXTENSIONS, enabled: active });
 
   const handleSelectFiles = useCallback(async () => {
     const selectedPaths = await open({
@@ -140,7 +141,9 @@ export function JdDetailsTab() {
     setSelected(nextIndex >= 0 ? new Set([nextIndex]) : new Set());
   }, [selected, files.length]);
 
+  // 页签隐藏时不响应 Delete，免得在别的页签误删这里的图片
   useEffect(() => {
+    if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Delete" && selected.size > 0) {
         event.preventDefault();
@@ -150,7 +153,7 @@ export function JdDetailsTab() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelected, selected.size]);
+  }, [active, deleteSelected, selected.size]);
 
   const handlePreview = useCallback(() => {
     if (files.length === 0) {

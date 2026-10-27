@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { FolderOpenOutlined } from "@ant-design/icons";
-import { Button, Checkbox, Empty, Radio, Select, Table, Typography } from "antd";
+import { Button, Checkbox, Empty, Radio, Select, Space, Table, Typography } from "antd";
 import {
   DropZone,
   FILE_ROW_ERROR_CLASS,
@@ -34,7 +34,7 @@ const FALLBACK_MODES: CropModeOption[] = [
   { value: "grid3", label: "九宫格拆分" },
 ];
 
-export function ImageCropTab() {
+export function ImageCropTab({ active = true }: { active?: boolean }) {
   const [files, setFiles] = useState<CropEntry[]>([]);
   const [modeOptions, setModeOptions] = useState<CropModeOption[]>(FALLBACK_MODES);
   const [globalMode, setGlobalMode] = useState<CropMode>("auto");
@@ -50,8 +50,11 @@ export function ImageCropTab() {
   );
   const wellRef = useRef<HTMLDivElement>(null);
 
+  // 去重要基于最新列表；在 effect 里同步，不在渲染过程中改 ref
   const filesRef = useRef<CropEntry[]>([]);
-  filesRef.current = files;
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   useEffect(() => {
     invoke<CropModeOption[]>("crop_mode_options")
@@ -147,6 +150,7 @@ export function ImageCropTab() {
       }
 
       const entries = await resolveModes(freshPaths, globalMode);
+      filesRef.current = [...filesRef.current, ...entries];
       setFiles((prev) => [...prev, ...entries]);
       log(`图片裁切：已添加 ${entries.length} 张图片。`, "info");
 
@@ -157,7 +161,11 @@ export function ImageCropTab() {
     [globalMode, quickMode, resolveModes, runCrop, log]
   );
 
-  const { hovering } = useFileDrop((paths) => void addPaths(paths), { extensions: IMAGE_EXTENSIONS });
+  // 只有当前显示的页签接收拖入，否则切走的页签也会收到文件
+  const { hovering } = useFileDrop((paths) => void addPaths(paths), {
+    extensions: IMAGE_EXTENSIONS,
+    enabled: active,
+  });
 
   const handleSelectFiles = useCallback(async () => {
     const selected = await open({
@@ -200,6 +208,12 @@ export function ImageCropTab() {
     },
     [files]
   );
+
+  const handleClear = useCallback(() => {
+    setFiles([]);
+    setFailed(new Set());
+    log("图片列表已清空。", "info");
+  }, [log]);
 
   const handleItemModeChange = useCallback((path: string, mode: CropMode) => {
     setFiles((prev) => prev.map((item) => (item.path === path ? { ...item, mode } : item)));
@@ -280,7 +294,17 @@ export function ImageCropTab() {
           className="flex-1"
           title="待裁切图片"
           extra={
-            <Typography.Text type="secondary">{files.length} 张</Typography.Text>
+            <Space size="small">
+              <Typography.Text type="secondary">{files.length} 张</Typography.Text>
+              <Button
+                type="link"
+                size="small"
+                disabled={processing || files.length === 0}
+                onClick={handleClear}
+              >
+                清空列表
+              </Button>
+            </Space>
           }
         >
           <DropZone
