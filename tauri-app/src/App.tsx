@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { App as AntApp } from "antd";
 import { FileImageOutlined, ScissorOutlined, SwapOutlined } from "@ant-design/icons";
 import { AppShell, ThemeMenu, ThemeToggle, type NavItem } from "@/ui-kit";
+import type { UpdateInfo } from "@/types";
 import { ImageConvertTab } from "./components/ImageConvertTab";
 import { ImageCropTab } from "./components/ImageCropTab";
 import { JdDetailsTab } from "./components/JdDetailsTab";
@@ -20,8 +23,43 @@ const PAGES: { key: TabKey; View: (props: { active: boolean }) => React.ReactNod
   { key: "jd", View: JdDetailsTab },
 ];
 
+/** 启动时检查 GitHub 最新 Release，有新版本时询问是否打开发布页；检查失败静默忽略。 */
+function useUpdateCheck() {
+  const { modal } = AntApp.useApp();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+
+    invoke<UpdateInfo | null>("check_update")
+      .then((info) => {
+        if (cancelled || !info) return;
+        modal.confirm({
+          title: "发现新版本",
+          content: (
+            <>
+              <p>发现新版本 {info.latest}。</p>
+              <p>当前版本：{info.current}</p>
+              <p>是否打开 GitHub Release 页面？</p>
+            </>
+          ),
+          okText: "打开",
+          cancelText: "稍后",
+          onOk: () => invoke("open_release_page", { url: info.url }).catch(() => {}),
+        });
+      })
+      .catch(() => {});
+
+    // StrictMode 下 effect 会执行两次，只让最后一次弹窗
+    return () => {
+      cancelled = true;
+    };
+  }, [modal]);
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("convert");
+  useUpdateCheck();
 
   return (
     <AppShell

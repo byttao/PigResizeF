@@ -2,12 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use image::{
-    DynamicImage, GenericImageView, ImageDecoder, Rgba, RgbaImage, imageops::FilterType,
-    metadata::Orientation,
+    DynamicImage, ImageDecoder, Rgb, RgbImage, imageops::FilterType, metadata::Orientation,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
 
 /// 裁切模式，与原 C# 版本的 CropMode 一一对应。
@@ -71,30 +71,88 @@ pub struct ProgressEvent {
     pub stage: String,
 }
 
-/// 向前端推送某一批任务的进度。
+/// 向前端推送某一批任务的进度，支持多张图片并发上报。
 struct ProgressReporter {
     app: tauri::AppHandle,
     event: &'static str,
     total: usize,
+    state: Mutex<ProgressState>,
+}
+
+struct ProgressState {
+    /// 每张图片的完成度，None 表示尚未开始。
+    fractions: Vec<Option<f64>>,
+    /// 已开始处理的张数，只增不减，前端据此判断“新文件开始”。
+    started: usize,
 }
 
 impl ProgressReporter {
     fn new(app: tauri::AppHandle, event: &'static str, total: usize) -> Self {
-        Self { app, event, total }
+        let state = ProgressState { fractions: vec![None; total], started: 0 };
+        Self { app, event, total, state: Mutex::new(state) }
     }
 
-    /// index 为当前文件序号（从 0 开始），fraction 为单张图片内部完成度（0~1）。
+    /// index 为文件序号（从 0 开始），fraction 为单张图片内部完成度（0~1）。
+    /// 总进度取所有图片完成度之和，并发时也不会回退。
     fn report(&self, index: usize, file_name: &str, fraction: f64, stage: &str) {
         let total = self.total.max(1);
-        let percent = ((index as f64 + fraction.clamp(0.0, 1.0)) / total as f64 * 100.0).min(100.0);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(slot) = state.fractions.get_mut(index) else { return };
+        let is_new = slot.is_none();
+        *slot = Some(slot.unwrap_or(0.0).max(fraction.clamp(0.0, 1.0)));
+        if is_new {
+            state.started += 1;
+        }
+
+        let done: f64 = state.fractions.iter().flatten().sum();
+        // 持锁发送，保证事件顺序与进度一致。
         let _ = self.app.emit(self.event, ProgressEvent {
-            current: (index + 1).min(total),
+            current: state.started.min(total),
             total,
             file_name: file_name.to_string(),
-            percent,
+            percent: (done / total as f64 * 100.0).min(100.0),
             stage: stage.to_string(),
         });
     }
+}
+
+/// 批处理同时处理的图片数上限：大图解码后单张占用数十 MB，限制并发以控制内存峰值。
+const MAX_BATCH_CONCURRENCY: usize = 4;
+
+fn batch_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = std::thread::available_parallelism()
+            .map_or(2, |n| n.get())
+            .min(MAX_BATCH_CONCURRENCY);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|i| format!("pig-batch-{i}"))
+            .build()
+            .expect("无法创建批处理线程池")
+    })
+}
+
+/// 在受限线程池中并发处理每个文件，结果按输入顺序返回。
+/// process 收到 (序号, 文件名, 进度回调)，结束后自动上报“完成/失败”。
+fn run_batch<J, F>(jobs: &[J], path_of: fn(&J) -> &str, reporter: &ProgressReporter, process: F) -> Vec<Result<usize, String>>
+where
+    J: Sync,
+    F: Fn(&J, &Path, StageProgress) -> Result<usize, String> + Sync,
+{
+    batch_pool().install(|| {
+        jobs.par_iter()
+            .enumerate()
+            .map(|(index, job)| {
+                let path = PathBuf::from(path_of(job));
+                let file_name = file_name_of(&path);
+                let progress = |fraction: f64, stage: &str| reporter.report(index, &file_name, fraction, stage);
+                let result = process(job, &path, &progress);
+                progress(1.0, if result.is_ok() { "完成" } else { "失败" });
+                result
+            })
+            .collect()
+    })
 }
 
 /// 单张图片内部的进度回调：(完成度 0~1, 阶段说明)。
@@ -165,24 +223,16 @@ fn batch_resize_blocking(
     }
 
     let reporter = ProgressReporter::new(app, "resize-progress", files.len());
+    let results = run_batch(&files, |f| f.as_str(), &reporter, |_, path, progress| {
+        resize_single_image(path, preset, progress)
+    });
+
     let mut output_count = 0usize;
     let mut failed_files = Vec::new();
-
-    // 顺序处理大图，避免多张高分辨率图片同时解码导致内存峰值过高。
-    for (index, file_path) in files.iter().enumerate() {
-        let path = PathBuf::from(file_path);
-        let file_name = file_name_of(&path);
-        let progress = |fraction: f64, stage: &str| reporter.report(index, &file_name, fraction, stage);
-
-        match resize_single_image(&path, preset, &progress) {
-            Ok(count) => {
-                output_count += count;
-                progress(1.0, "完成");
-            }
-            Err(_) => {
-                failed_files.push(file_path.clone());
-                progress(1.0, "失败");
-            }
+    for (file_path, result) in files.iter().zip(results) {
+        match result {
+            Ok(count) => output_count += count,
+            Err(_) => failed_files.push(file_path.clone()),
         }
     }
 
@@ -212,7 +262,7 @@ fn resize_single_image(
     let (target_width, target_height) = preset.target_size();
 
     progress(0.35, "缩放");
-    let padded = resize_with_padding(&image, target_width, target_height);
+    let padded = resize_with_padding(&image, target_width, target_height)?;
 
     progress(0.8, "保存");
 
@@ -223,12 +273,16 @@ fn resize_single_image(
         .ok_or("文件名无效")?;
     let output_path = parent.join(format!("{}_{}.jpg", stem, preset.suffix()));
 
-    save_jpeg(&DynamicImage::ImageRgba8(padded), &output_path, 90)?;
+    save_jpeg(&padded, &output_path, 90)?;
     Ok(1)
 }
 
 /// 等比缩放原图，将不足部分用白色背景补齐到指定尺寸。
-fn resize_with_padding(source: &DynamicImage, target_width: u32, target_height: u32) -> RgbaImage {
+fn resize_with_padding(
+    source: &RgbImage,
+    target_width: u32,
+    target_height: u32,
+) -> Result<RgbImage, String> {
     let (source_width, source_height) = source.dimensions();
     let width_ratio = target_width as f32 / source_width as f32;
     let height_ratio = target_height as f32 / source_height as f32;
@@ -237,15 +291,14 @@ fn resize_with_padding(source: &DynamicImage, target_width: u32, target_height: 
     let new_width = ((source_width as f32 * ratio) as u32).max(1);
     let new_height = ((source_height as f32 * ratio) as u32).max(1);
 
-    let resized = source.resize_exact(new_width, new_height, FilterType::Lanczos3);
+    let resized = resize_lanczos(source, None, new_width, new_height)?;
 
-    let mut canvas =
-        RgbaImage::from_pixel(target_width, target_height, Rgba([255, 255, 255, 255]));
+    let mut canvas = RgbImage::from_pixel(target_width, target_height, Rgb([255, 255, 255]));
     let x_offset = (target_width - new_width) / 2;
     let y_offset = (target_height - new_height) / 2;
 
-    image::imageops::overlay(&mut canvas, &resized.to_rgba8(), x_offset.into(), y_offset.into());
-    canvas
+    image::imageops::replace(&mut canvas, &resized, x_offset.into(), y_offset.into());
+    Ok(canvas)
 }
 
 // ---------------------------------------------------------------------------
@@ -289,23 +342,16 @@ fn batch_crop_blocking(
     }
 
     let reporter = ProgressReporter::new(app, "crop-progress", jobs.len());
+    let results = run_batch(&jobs, |job| job.path.as_str(), &reporter, |job, path, progress| {
+        crop_single_image(path, job.mode, output_dir.as_deref(), progress)
+    });
+
     let mut output_count = 0usize;
     let mut failed_files = Vec::new();
-
-    for (index, job) in jobs.iter().enumerate() {
-        let path = PathBuf::from(&job.path);
-        let file_name = file_name_of(&path);
-        let progress = |fraction: f64, stage: &str| reporter.report(index, &file_name, fraction, stage);
-
-        match crop_single_image(&path, job.mode, output_dir.as_deref(), &progress) {
-            Ok(count) => {
-                output_count += count;
-                progress(1.0, "完成");
-            }
-            Err(_) => {
-                failed_files.push(job.path.clone());
-                progress(1.0, "失败");
-            }
+    for (job, result) in jobs.iter().zip(results) {
+        match result {
+            Ok(count) => output_count += count,
+            Err(_) => failed_files.push(job.path.clone()),
         }
     }
 
@@ -375,7 +421,7 @@ fn crop_single_image(
 
 /// 四角乱切：在原图 85% 宽高范围内取最大的 3:4 区域，锚定到四个角并缩放到 1440x1920。
 fn crop_random_corners(
-    image: &DynamicImage,
+    image: &RgbImage,
     original_name: &str,
     output_dir: &Path,
     piece_progress: &dyn Fn(usize, usize),
@@ -399,8 +445,7 @@ fn crop_random_corners(
 
     for (index, (x, y)) in positions.iter().enumerate() {
         piece_progress(index, positions.len());
-        let cropped = image.crop_imm(*x, *y, crop_width, crop_height);
-        let resized = cropped.resize_exact(1440, 1920, FilterType::Lanczos3);
+        let resized = resize_lanczos(image, Some((*x, *y, crop_width, crop_height)), 1440, 1920)?;
 
         let output_path = output_dir.join(format!("{}-乱切{}.jpg", original_name, index + 1));
         save_jpeg(&resized, &output_path, 100)?;
@@ -411,7 +456,7 @@ fn crop_random_corners(
 
 /// 宫格拆分：2x2 或 3x3，使用整数边界分割以免丢失画面。
 fn crop_grid(
-    image: &DynamicImage,
+    image: &RgbImage,
     original_name: &str,
     output_dir: &Path,
     grid_size: u32,
@@ -432,7 +477,8 @@ fn crop_grid(
             let right = (column + 1) * width / grid_size;
 
             piece_progress(index - 1, piece_count);
-            let cropped = image.crop_imm(left, top, right - left, bottom - top);
+            let cropped =
+                image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image();
             let output_path = output_dir.join(format!("{}-拆分{}.jpg", original_name, index));
             save_jpeg(&cropped, &output_path, 100)?;
             index += 1;
@@ -443,7 +489,7 @@ fn crop_grid(
 }
 
 /// 自动识别裁切模式：九宫格需四条理论分界线同时明显，再检测四宫格。
-fn detect_crop_mode(image: &DynamicImage) -> CropMode {
+fn detect_crop_mode(image: &RgbImage) -> CropMode {
     let (width, height) = image.dimensions();
 
     let grid3_scores = [
@@ -472,9 +518,8 @@ fn detect_crop_mode(image: &DynamicImage) -> CropMode {
 }
 
 /// 在理论分界线附近搜索最大接缝得分，兼容带细分隔线或轻微偏移的拼图。
-fn get_peak_seam_score(image: &DynamicImage, vertical: bool, center: u32) -> f64 {
-    let rgba = image.to_rgba8();
-    let (width, height) = rgba.dimensions();
+fn get_peak_seam_score(image: &RgbImage, vertical: bool, center: u32) -> f64 {
+    let (width, height) = image.dimensions();
 
     let dimension = if vertical { width } else { height };
     let search_radius = (dimension as f64 * 0.012).round() as u32;
@@ -493,8 +538,8 @@ fn get_peak_seam_score(image: &DynamicImage, vertical: bool, center: u32) -> f64
         if vertical {
             let mut y = 0;
             while y < height {
-                let left = rgba.get_pixel(position - 1, y);
-                let right = rgba.get_pixel(position, y);
+                let left = image.get_pixel(position - 1, y);
+                let right = image.get_pixel(position, y);
                 total_difference += channel_difference(left, right);
                 sample_count += 1;
                 y += sample_step;
@@ -502,8 +547,8 @@ fn get_peak_seam_score(image: &DynamicImage, vertical: bool, center: u32) -> f64
         } else {
             let mut x = 0;
             while x < width {
-                let top = rgba.get_pixel(x, position - 1);
-                let bottom = rgba.get_pixel(x, position);
+                let top = image.get_pixel(x, position - 1);
+                let bottom = image.get_pixel(x, position);
                 total_difference += channel_difference(top, bottom);
                 sample_count += 1;
                 x += sample_step;
@@ -522,7 +567,7 @@ fn get_peak_seam_score(image: &DynamicImage, vertical: bool, center: u32) -> f64
 }
 
 /// 两个像素的 RGB 平均通道差。
-fn channel_difference(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
+fn channel_difference(a: &Rgb<u8>, b: &Rgb<u8>) -> f64 {
     (a[0].abs_diff(b[0]) as f64 + a[1].abs_diff(b[1]) as f64 + a[2].abs_diff(b[2]) as f64) / 3.0
 }
 
@@ -583,7 +628,7 @@ fn export_jd_details(
     const OUTPUT_WIDTH: u32 = 790;
     const SEGMENT_HEIGHT: u32 = 1500;
 
-    let mut segment: Option<RgbaImage> = None;
+    let mut segment: Option<RgbImage> = None;
     let mut used_height: u32 = 0;
     let mut output_index = 1usize;
 
@@ -597,8 +642,7 @@ fn export_jd_details(
         let scaled_height =
             ((image.height() as f64 * OUTPUT_WIDTH as f64 / image.width() as f64).round() as u32).max(1);
         progress(0.3, "缩放");
-        let scaled = image.resize_exact(OUTPUT_WIDTH, scaled_height, FilterType::Lanczos3);
-        let scaled_rgba = scaled.to_rgba8();
+        let scaled = resize_lanczos(&image, None, OUTPUT_WIDTH, scaled_height)?;
 
         let mut source_y = 0u32;
         while source_y < scaled_height {
@@ -608,10 +652,10 @@ fn export_jd_details(
                 &format!("拼接第 {output_index} 段"),
             );
             if segment.is_none() {
-                segment = Some(RgbaImage::from_pixel(
+                segment = Some(RgbImage::from_pixel(
                     OUTPUT_WIDTH,
                     SEGMENT_HEIGHT,
-                    Rgba([255, 255, 255, 255]),
+                    Rgb([255, 255, 255]),
                 ));
             }
 
@@ -620,14 +664,14 @@ fn export_jd_details(
 
             // 把源图的一段拷贝到当前分段的 used_height 位置。
             let strip = image::imageops::crop_imm(
-                &scaled_rgba,
+                &scaled,
                 0,
                 source_y,
                 OUTPUT_WIDTH,
                 copy_height,
             )
             .to_image();
-            image::imageops::overlay(current, &strip, 0, used_height.into());
+            image::imageops::replace(current, &strip, 0, used_height.into());
 
             source_y += copy_height;
             used_height += copy_height;
@@ -656,7 +700,7 @@ fn export_jd_details(
 
 /// 写出一张京东详情分段，文件名为 `京东详情-001.jpg`。
 fn save_jd_segment(
-    segment: &RgbaImage,
+    segment: &RgbImage,
     height: u32,
     output_directory: &Path,
     output_index: usize,
@@ -664,13 +708,13 @@ fn save_jd_segment(
     let output_path = output_directory.join(format!("京东详情-{output_index:03}.jpg"));
 
     if height == segment.height() {
-        save_jpeg(&DynamicImage::ImageRgba8(segment.clone()), &output_path, 100)?;
+        save_jpeg(segment, &output_path, 100)?;
         return Ok(());
     }
 
     // 末段高度不足，裁剪到实际高度再写出。
     let cropped = image::imageops::crop_imm(segment, 0, 0, segment.width(), height).to_image();
-    save_jpeg(&DynamicImage::ImageRgba8(cropped), &output_path, 100)?;
+    save_jpeg(&cropped, &output_path, 100)?;
     Ok(())
 }
 
@@ -678,15 +722,62 @@ fn save_jd_segment(
 // 公共辅助
 // ---------------------------------------------------------------------------
 
-/// 读取图片并按 EXIF Orientation 修正方向。
-fn load_oriented_image(path: &Path) -> Result<DynamicImage, String> {
+/// 读取图片、按 EXIF Orientation 修正方向，并转为 RGB（透明部分铺白底，与输出 JPG 一致）。
+fn load_oriented_image(path: &Path) -> Result<RgbImage, String> {
     let mut image = image::open(path).map_err(|e| format!("无法打开图片: {e}"))?;
 
     if let Some(orientation) = read_exif_orientation(path) {
         image.apply_orientation(orientation);
     }
 
-    Ok(image)
+    Ok(flatten_to_rgb(image))
+}
+
+/// 带透明通道的图片按 alpha 混合到白底上，其余直接转 RGB。
+fn flatten_to_rgb(image: DynamicImage) -> RgbImage {
+    if !image.color().has_alpha() {
+        return image.into_rgb8();
+    }
+
+    let rgba = image.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let pixels = rgba
+        .as_raw()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            let alpha = p[3] as u32;
+            [0, 1, 2].map(|i| ((p[i] as u32 * alpha + 255 * (255 - alpha) + 127) / 255) as u8)
+        })
+        .collect();
+    RgbImage::from_raw(width, height, pixels).expect("像素数量与尺寸一致")
+}
+
+/// Lanczos3 缩放（fast_image_resize，SIMD + 多线程）。crop 为源图上的 (x, y, 宽, 高)，None 表示整张。
+fn resize_lanczos(
+    source: &RgbImage,
+    crop: Option<(u32, u32, u32, u32)>,
+    width: u32,
+    height: u32,
+) -> Result<RgbImage, String> {
+    use fast_image_resize::{
+        FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
+        images::{Image, ImageRef},
+    };
+
+    let src = ImageRef::new(source.width(), source.height(), source.as_raw(), PixelType::U8x3)
+        .map_err(|e| format!("缩放失败: {e}"))?;
+    let mut dst = Image::new(width, height, PixelType::U8x3);
+    let mut options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+    if let Some((x, y, w, h)) = crop {
+        options = options.crop(x as f64, y as f64, w as f64, h as f64);
+    }
+
+    Resizer::new()
+        .resize(&src, &mut dst, &options)
+        .map_err(|e| format!("缩放失败: {e}"))?;
+    RgbImage::from_raw(width, height, dst.into_vec()).ok_or_else(|| "缩放失败".to_string())
 }
 
 /// 从 JPEG 的 EXIF 中读取拍摄方向，非 JPEG 或缺失时返回 None。
@@ -705,12 +796,27 @@ fn read_exif_orientation(path: &Path) -> Option<Orientation> {
 }
 
 /// 以指定质量写出 JPG。
-fn save_jpeg(image: &DynamicImage, path: &Path, quality: u8) -> Result<(), String> {
-    let rgb = image.to_rgb8();
+/// 先写临时文件再改名，并发任务输出到同一路径时不会互相写坏。
+fn save_jpeg(rgb: &RgbImage, path: &Path, quality: u8) -> Result<(), String> {
+    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = path.with_extension(format!("{}-{sequence}.tmp", std::process::id()));
 
+    let result = write_jpeg(rgb, &temp, quality)
+        .and_then(|()| std::fs::rename(&temp, path).map_err(|e| format!("无法写入文件: {e}")));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+fn write_jpeg(rgb: &RgbImage, path: &Path, quality: u8) -> Result<(), String> {
+    use std::io::Write;
+
+    // 编码器按字节小块写出，必须带缓冲，否则每次写入都是一次系统调用，速度慢数十倍。
     let file = std::fs::File::create(path).map_err(|e| format!("无法创建文件: {e}"))?;
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, quality);
-    encoder
+    let mut writer = std::io::BufWriter::new(file);
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, quality)
         .encode(
             rgb.as_raw(),
             rgb.width(),
@@ -718,6 +824,7 @@ fn save_jpeg(image: &DynamicImage, path: &Path, quality: u8) -> Result<(), Strin
             image::ExtendedColorType::Rgb8,
         )
         .map_err(|e| format!("编码失败: {e}"))?;
+    writer.flush().map_err(|e| format!("写入失败: {e}"))?;
     Ok(())
 }
 
@@ -811,21 +918,16 @@ fn ensure_preview_thumbnail(cache_dir: &Path, file_path: &str) -> Result<PathBuf
             / image.width() as f64)
             .round() as u32)
             .max(1);
-        image.resize_exact(PREVIEW_THUMBNAIL_WIDTH, height, FilterType::Triangle)
+        image::imageops::resize(&image, PREVIEW_THUMBNAIL_WIDTH, height, FilterType::Triangle)
     } else {
         image
     };
 
-    // 先写临时文件再改名，避免并发请求读到写了一半的缩略图。
-    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let sequence = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temp = cached.with_extension(format!("{}-{sequence}.tmp", std::process::id()));
-    save_jpeg(&thumbnail, &temp, 85)?;
-    if let Err(error) = std::fs::rename(&temp, &cached) {
-        let _ = std::fs::remove_file(&temp);
-        // Windows 上目标已存在会改名失败，说明另一个请求已经写好了缩略图。
+    // save_jpeg 先写临时文件再改名，并发请求不会读到写了一半的缩略图。
+    if let Err(error) = save_jpeg(&thumbnail, &cached, 85) {
+        // 改名失败但目标已存在，说明另一个请求已经写好了缩略图。
         if !cached.exists() {
-            return Err(format!("无法写入缓存: {error}"));
+            return Err(error);
         }
     }
     Ok(cached)
@@ -850,6 +952,96 @@ fn prune_preview_cache(app: &tauri::AppHandle) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 更新检测
+// ---------------------------------------------------------------------------
+
+const LATEST_RELEASE_API: &str = "https://api.github.com/repos/byttao/PigResizeF/releases/latest";
+const RELEASE_PAGE_PREFIX: &str = "https://github.com/byttao/PigResizeF/";
+
+/// 有新版本时返回给前端的提示信息。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UpdateInfo {
+    pub latest: String,
+    pub current: String,
+    pub url: String,
+}
+
+#[derive(Deserialize)]
+struct LatestRelease {
+    tag_name: String,
+    html_url: String,
+}
+
+/// 查询 GitHub 最新 Release，有更高版本时返回提示信息。
+/// 网络不可用、超时或数据异常都静默返回 None，不影响本地图片处理。
+#[tauri::command]
+async fn check_update() -> Option<UpdateInfo> {
+    fetch_latest_release().await.ok()?
+}
+
+async fn fetch_latest_release() -> Result<Option<UpdateInfo>, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent(concat!("PigResize/", env!("CARGO_PKG_VERSION")))
+        .build()?;
+    let response = client
+        .get(LATEST_RELEASE_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let release: LatestRelease = response.json().await?;
+    Ok(newer_release(&release, env!("CARGO_PKG_VERSION")))
+}
+
+/// 仅当 Release 版本高于当前版本且链接指向本仓库时返回提示。
+fn newer_release(release: &LatestRelease, current: &str) -> Option<UpdateInfo> {
+    let latest = parse_version(&release.tag_name)?;
+    if latest <= parse_version(current)? || !release.html_url.starts_with(RELEASE_PAGE_PREFIX) {
+        return None;
+    }
+
+    Some(UpdateInfo {
+        latest: release.tag_name.clone(),
+        current: format!("v{current}"),
+        url: release.html_url.clone(),
+    })
+}
+
+/// 解析 `v1.6.3` 这类版本号，与 C# 的 Version.TryParse 一样接受 2~4 段，缺少的段按 0 处理。
+fn parse_version(text: &str) -> Option<[u64; 4]> {
+    let parts = text
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .split('.')
+        .map(|part| part.parse::<u64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if !(2..=4).contains(&parts.len()) {
+        return None;
+    }
+
+    let mut version = [0; 4];
+    version[..parts.len()].copy_from_slice(&parts);
+    Some(version)
+}
+
+/// 用系统浏览器打开 Release 页面，只允许本仓库的 GitHub 链接。
+#[tauri::command]
+fn open_release_page(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    if !url.starts_with(RELEASE_PAGE_PREFIX) {
+        return Err("链接无效".to_string());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("无法打开链接: {e}"))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -868,6 +1060,8 @@ fn main() {
             jd_export,
             read_image_sizes,
             jd_preview_thumbnail,
+            check_update,
+            open_release_page,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -878,19 +1072,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_check_compares_versions() {
+        let release = |tag: &str| LatestRelease {
+            tag_name: tag.to_string(),
+            html_url: format!("{RELEASE_PAGE_PREFIX}releases/tag/{tag}"),
+        };
+
+        assert!(newer_release(&release("v1.6.4"), "1.6.3").is_some());
+        assert!(newer_release(&release("V1.7"), "1.6.3").is_some());
+        assert!(newer_release(&release("v1.6.3"), "1.6.3").is_none());
+        assert!(newer_release(&release("v1.6.2"), "1.6.3").is_none());
+        assert!(newer_release(&release("v1.10.0"), "1.9.9").is_some());
+        assert!(newer_release(&release("nightly"), "1.6.3").is_none());
+
+        let foreign = LatestRelease {
+            tag_name: "v9.0.0".to_string(),
+            html_url: "https://example.com/v9".to_string(),
+        };
+        assert!(newer_release(&foreign, "1.6.3").is_none());
+    }
+
+    #[test]
     fn preview_thumbnail_is_scaled_and_reused() {
         let dir = std::env::temp_dir().join(format!("pig-resize-test-{}", std::process::id()));
         let cache_dir = dir.join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
         let source = dir.join("wide.jpg");
-        let image = RgbaImage::from_pixel(3000, 1500, Rgba([200, 80, 40, 255]));
-        save_jpeg(&DynamicImage::ImageRgba8(image), &source, 90).unwrap();
+        let image = RgbImage::from_pixel(3000, 1500, Rgb([200, 80, 40]));
+        save_jpeg(&image, &source, 90).unwrap();
         let source = source.to_string_lossy().into_owned();
 
         let first = ensure_preview_thumbnail(&cache_dir, &source).unwrap();
         let thumbnail = image::open(&first).unwrap();
-        assert_eq!(thumbnail.dimensions(), (PREVIEW_THUMBNAIL_WIDTH, 512));
+        assert_eq!((thumbnail.width(), thumbnail.height()), (PREVIEW_THUMBNAIL_WIDTH, 512));
         assert_eq!(read_display_size(Path::new(&source)), Some((3000, 1500)));
 
         // 第二次请求直接命中缓存，不会重新写文件。

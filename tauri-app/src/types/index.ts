@@ -18,3 +18,10 @@ export interface BatchResult {
   output_count: number;
   failed_files: string[];
 }
+
+/** 启动时检测到的新版本（Rust check_update 返回） */
+export interface UpdateInfo {
+  latest: string;
+  current: string;
+  url: string;
+}
